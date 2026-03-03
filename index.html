@@ -52,6 +52,64 @@ h1 { font-size: 20px; margin-bottom: 20px; }
 
 .error-msg { color: #d32f2f; margin-top: 12px; font-size: 14px; display: none; }
 .summary { display: none; background: #fff; border-radius: 8px; padding: 16px; margin-top: 16px; font-size: 14px; }
+
+.filter-bar {
+  display: none;
+  background: #fff;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-top: 16px;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.filter-bar label { font-size: 13px; color: #666; }
+.filter-bar input { font-size: 13px; padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; }
+#keywordInput { width: 280px; }
+.filter-count { font-size: 13px; color: #666; margin-left: auto; }
+
+#logViewerSection { display: none; background: #fff; border-radius: 8px; margin-top: 16px; }
+.log-viewer-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e0e0e0;
+  font-size: 14px;
+  font-weight: 500;
+  display: flex;
+  justify-content: space-between;
+}
+#logViewport {
+  height: 600px;
+  overflow: auto;
+  position: relative;
+  font-family: monospace;
+  font-size: 13px;
+  background: #1e1e1e;
+  color: #d4d4d4;
+}
+#logInner { position: relative; min-width: fit-content; }
+#logContent { position: absolute; left: 0; right: 0; top: 0; }
+.log-line {
+  height: 20px;
+  line-height: 20px;
+  padding: 0 8px;
+  white-space: nowrap;
+  display: flex;
+}
+.log-line:hover { background: rgba(255,255,255,0.05); }
+.log-src { color: #666; font-size: 11px; margin-right: 8px; flex-shrink: 0; }
+.log-text { white-space: pre; }
+.log-highlight { background: rgba(255,255,0,0.3); }
+
+#logViewerSection.maximized {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  z-index: 9999; margin: 0; border-radius: 0;
+}
+#logViewerSection.maximized #logViewport { height: calc(100vh - 45px); }
+.maximize-btn {
+  background: none; border: 1px solid #ccc; border-radius: 4px;
+  padding: 2px 8px; cursor: pointer; font-size: 12px; color: #666;
+}
+.maximize-btn:hover { background: #f0f0f0; }
 </style>
 </head>
 <body>
@@ -59,9 +117,9 @@ h1 { font-size: 20px; margin-bottom: 20px; }
   <h1>Tar.Gz Stream Parser</h1>
 
   <div class="upload-area" id="uploadArea">
-    <p>Click to select a .tar.gz / .tgz file</p>
+    <p>Click to select a .tar / .tar.gz / .tgz file</p>
     <p style="font-size:13px;color:#999;margin-top:8px;">Supports 10GB+ files, parsed locally in the browser</p>
-    <input type="file" id="fileInput" accept=".tgz,application/gzip,application/x-gzip,application/x-compressed-tar">
+    <input type="file" id="fileInput" accept=".tar,.tgz,.tar.gz,application/gzip,application/x-gzip,application/x-tar">
   </div>
 
   <div class="progress-section" id="progressSection">
@@ -73,6 +131,29 @@ h1 { font-size: 20px; margin-bottom: 20px; }
   <div class="error-msg" id="errorMsg"></div>
 
   <div class="summary" id="summary"></div>
+
+  <div class="filter-bar" id="filterBar">
+    <label>Date From <input type="date" id="filterDateFrom"></label>
+    <label>Date To <input type="date" id="filterDateTo"></label>
+    <label>Time From <input type="time" id="filterTimeFrom"></label>
+    <label>Time To <input type="time" id="filterTimeTo"></label>
+    <label>Filename <input type="text" id="filenameInput" placeholder="e.g. utas AND (run OR alarm)"></label>
+    <label>Keyword <input type="text" id="keywordInput" placeholder="e.g. error AND (timeout OR -debug)"></label>
+    <span class="filter-count" id="filterCount"></span>
+  </div>
+
+  <div id="logViewerSection">
+    <div class="log-viewer-header">
+      <span>Log Viewer</span>
+      <span style="display:flex;align-items:center;gap:8px">
+        <span id="logViewerStats" style="font-size:12px;color:#999"></span>
+        <button class="maximize-btn" id="maximizeBtn">Maximize</button>
+      </span>
+    </div>
+    <div id="logViewport">
+      <div id="logInner"><div id="logContent"></div></div>
+    </div>
+  </div>
 
   <div class="results-section" id="resultsSection"></div>
 </div>
@@ -88,11 +169,329 @@ h1 { font-size: 20px; margin-bottom: 20px; }
   var errorMsg = document.getElementById('errorMsg');
   var resultsSection = document.getElementById('resultsSection');
   var summaryEl = document.getElementById('summary');
+  var filterBarEl = document.getElementById('filterBar');
+  var logViewerSectionEl = document.getElementById('logViewerSection');
+  var filterDateFromEl = document.getElementById('filterDateFrom');
+  var filterDateToEl = document.getElementById('filterDateTo');
+  var filterTimeFromEl = document.getElementById('filterTimeFrom');
+  var filterTimeToEl = document.getElementById('filterTimeTo');
+  var filenameInputEl = document.getElementById('filenameInput');
+  var keywordInputEl = document.getElementById('keywordInput');
+  var filterCountEl = document.getElementById('filterCount');
+  var logViewport = document.getElementById('logViewport');
+  var logInner = document.getElementById('logInner');
+  var logContent = document.getElementById('logContent');
+  var logViewerStatsEl = document.getElementById('logViewerStats');
   var worker = null;
+
+  var allLogEntries = [];
+  var allLogLines = [];
+  var filteredLines = [];
+
+  var LINE_HEIGHT = 20;
+  var highlightText = '';
+
+  // ----- Timestamp parsing -----
+
+  var MONTH_MAP = { jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11 };
+
+  function parseTimestamp(text) {
+    var m;
+    // YYYY-MM-DD or YYYY/MM/DD followed by T or space and HH:MM:SS
+    m = text.match(/(\d{4}[\/\-]\d{2}[\/\-]\d{2})[T ](\d{2}:\d{2}:\d{2})/);
+    if (m) {
+      var dateStr = m[1].replace(/\//g, '-');
+      return new Date(dateStr + 'T' + m[2]);
+    }
+    // Syslog: MMM DD HH:MM:SS
+    m = text.match(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d{1,2})\s+(\d{2}:\d{2}:\d{2})\b/i);
+    if (m) {
+      var year = new Date().getFullYear();
+      var month = MONTH_MAP[m[1].toLowerCase()];
+      var day = parseInt(m[2], 10);
+      var parts = m[3].split(':');
+      return new Date(year, month, day, parseInt(parts[0], 10), parseInt(parts[1], 10), parseInt(parts[2], 10));
+    }
+    return null;
+  }
+
+  function parseLogFile(source, content) {
+    var rawLines = content.split('\n');
+    var lines = [];
+    var lastTimestamp = null;
+    for (var i = 0; i < rawLines.length; i++) {
+      var text = rawLines[i];
+      var ts = parseTimestamp(text);
+      if (ts) {
+        lastTimestamp = ts;
+      } else {
+        ts = lastTimestamp;
+      }
+      lines.push({ lineNum: i + 1, text: text, timestamp: ts });
+    }
+    return { source: source, lines: lines };
+  }
+
+  function buildAllLogLines() {
+    allLogLines = [];
+    for (var i = 0; i < allLogEntries.length; i++) {
+      var entry = allLogEntries[i];
+      for (var j = 0; j < entry.lines.length; j++) {
+        var line = entry.lines[j];
+        allLogLines.push({ source: entry.source, lineNum: line.lineNum, text: line.text, timestamp: line.timestamp });
+      }
+    }
+    // Sort by timestamp ascending (earliest first), null timestamps go to end
+    allLogLines.sort(function(a, b) {
+      if (!a.timestamp && !b.timestamp) return 0;
+      if (!a.timestamp) return 1;
+      if (!b.timestamp) return -1;
+      return a.timestamp - b.timestamp;
+    });
+  }
+
+  // ----- Keyword filter AST -----
+
+  var TK_WORD = 'WORD';
+  var TK_AND = 'AND';
+  var TK_OR = 'OR';
+  var TK_NOT = 'NOT';
+  var TK_LPAREN = 'LPAREN';
+  var TK_RPAREN = 'RPAREN';
+
+  function tokenize(input) {
+    var tokens = [];
+    var i = 0;
+    while (i < input.length) {
+      // skip whitespace
+      if (/\s/.test(input[i])) { i++; continue; }
+      if (input[i] === '(') { tokens.push({ type: TK_LPAREN }); i++; continue; }
+      if (input[i] === ')') { tokens.push({ type: TK_RPAREN }); i++; continue; }
+      if (input[i] === '-') {
+        // NOT prefix
+        tokens.push({ type: TK_NOT });
+        i++;
+        continue;
+      }
+      // read a word
+      var start = i;
+      while (i < input.length && !/[\s()]/.test(input[i])) i++;
+      var word = input.slice(start, i);
+      var upper = word.toUpperCase();
+      if (upper === 'AND') tokens.push({ type: TK_AND });
+      else if (upper === 'OR') tokens.push({ type: TK_OR });
+      else if (upper === 'NOT') tokens.push({ type: TK_NOT });
+      else tokens.push({ type: TK_WORD, value: word.toLowerCase() });
+    }
+    return tokens;
+  }
+
+  function parseKeyword(input) {
+    var tokens = tokenize(input);
+    if (tokens.length === 0) return null;
+    var pos = 0;
+
+    function peek() { return tokens[pos]; }
+    function consume() { return tokens[pos++]; }
+
+    function parseAtom() {
+      var t = peek();
+      if (!t) return null;
+      if (t.type === TK_LPAREN) {
+        consume();
+        var node = parseExpr();
+        if (peek() && peek().type === TK_RPAREN) consume();
+        return node;
+      }
+      if (t.type === TK_WORD) {
+        consume();
+        return { type: 'WORD', value: t.value };
+      }
+      return null;
+    }
+
+    function parseNotExpr() {
+      if (peek() && peek().type === TK_NOT) {
+        consume();
+        var operand = parseAtom();
+        if (!operand) return null;
+        return { type: 'NOT', operand: operand };
+      }
+      return parseAtom();
+    }
+
+    function parseAndExpr() {
+      var left = parseNotExpr();
+      if (!left) return null;
+      while (peek()) {
+        var t = peek();
+        // explicit AND
+        if (t.type === TK_AND) {
+          consume();
+          var right = parseNotExpr();
+          if (right) left = { type: 'AND', left: left, right: right };
+        } else if (t.type === TK_WORD || t.type === TK_NOT || t.type === TK_LPAREN) {
+          // implicit AND (adjacent terms)
+          var right = parseNotExpr();
+          if (right) left = { type: 'AND', left: left, right: right };
+        } else {
+          break;
+        }
+      }
+      return left;
+    }
+
+    function parseOrExpr() {
+      var left = parseAndExpr();
+      if (!left) return null;
+      while (peek() && peek().type === TK_OR) {
+        consume();
+        var right = parseAndExpr();
+        if (right) left = { type: 'OR', left: left, right: right };
+      }
+      return left;
+    }
+
+    function parseExpr() { return parseOrExpr(); }
+
+    return parseExpr();
+  }
+
+  function evalAST(node, text) {
+    if (!node) return true;
+    if (node.type === 'WORD') return text.indexOf(node.value) !== -1;
+    if (node.type === 'NOT') return !evalAST(node.operand, text);
+    if (node.type === 'AND') return evalAST(node.left, text) && evalAST(node.right, text);
+    if (node.type === 'OR') return evalAST(node.left, text) || evalAST(node.right, text);
+    return true;
+  }
+
+  // ----- Filtering & rendering -----
+
+  function pad2(n) {
+    return n < 10 ? '0' + n : '' + n;
+  }
+
+  function applyFilters() {
+    var dateFromVal = filterDateFromEl.value;
+    var dateToVal = filterDateToEl.value;
+    var fromVal = filterTimeFromEl.value;
+    var toVal = filterTimeToEl.value;
+    var fnInput = filenameInputEl.value.trim();
+    var fnAst = fnInput ? parseKeyword(fnInput) : null;
+    var kwInput = keywordInputEl.value.trim();
+    var kwAst = kwInput ? parseKeyword(kwInput) : null;
+    var hasDateTimeFilter = dateFromVal || dateToVal || fromVal || toVal;
+
+    filteredLines = allLogLines.filter(function(line) {
+      // filename filter
+      if (fnAst) {
+        if (!evalAST(fnAst, shortName(line.source).toLowerCase())) return false;
+      }
+      // date/time filter
+      if (line.timestamp) {
+        var ts = line.timestamp;
+        var d = ts.getFullYear() + '-' + pad2(ts.getMonth() + 1) + '-' + pad2(ts.getDate());
+        if (dateFromVal && d < dateFromVal) return false;
+        if (dateToVal && d > dateToVal) return false;
+        if (fromVal || toVal) {
+          var t = pad2(ts.getHours()) + ':' + pad2(ts.getMinutes());
+          if (fromVal && t < fromVal) return false;
+          if (toVal && t > toVal) return false;
+        }
+      } else {
+        if (hasDateTimeFilter) return false;
+      }
+      // keyword filter
+      if (kwAst) {
+        if (!evalAST(kwAst, line.text.toLowerCase())) return false;
+      }
+      return true;
+    });
+
+    filterCountEl.textContent = filteredLines.length.toLocaleString() + ' lines';
+    renderLogViewer();
+  }
+
+  function shortName(path) {
+    var parts = path.split('/');
+    return parts[parts.length - 1];
+  }
+
+  function escapeHtml(str) {
+    var div = document.createElement('div');
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
+  }
+
+  function highlightLine(text) {
+    if (!highlightText) return escapeHtml(text);
+    var regex = new RegExp('(' + highlightText.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+    var parts = text.split(regex);
+    var html = '';
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i].toLowerCase() === highlightText.toLowerCase()) {
+        html += '<span class="log-highlight">' + escapeHtml(parts[i]) + '</span>';
+      } else {
+        html += escapeHtml(parts[i]);
+      }
+    }
+    return html;
+  }
+
+  function renderLogViewer() {
+    var total = filteredLines.length;
+    logInner.style.height = (total * LINE_HEIGHT) + 'px';
+
+    var scrollTop = logViewport.scrollTop;
+    var viewHeight = logViewport.clientHeight || 600;
+    var startIdx = Math.max(0, Math.floor(scrollTop / LINE_HEIGHT) - 5);
+    var endIdx = Math.min(total, Math.ceil((scrollTop + viewHeight) / LINE_HEIGHT) + 5);
+
+    logContent.style.top = (startIdx * LINE_HEIGHT) + 'px';
+
+    var html = '';
+    for (var i = startIdx; i < endIdx; i++) {
+      var line = filteredLines[i];
+      html += '<div class="log-line"><span class="log-src">' +
+        escapeHtml(shortName(line.source)) + ':' + line.lineNum + '</span>' +
+        '<span class="log-text">' + highlightLine(line.text) + '</span></div>';
+    }
+    logContent.innerHTML = html;
+    logViewerStatsEl.textContent = total.toLocaleString() + ' lines / ' + allLogLines.length.toLocaleString() + ' total';
+  }
+
+  logViewport.addEventListener('mouseup', function() {
+    var sel = window.getSelection().toString().trim();
+    if (sel.length >= 2) {
+      highlightText = sel;
+    } else {
+      highlightText = '';
+    }
+    renderLogViewer();
+  });
+
+  logViewport.addEventListener('scroll', function() { renderLogViewer(); });
+
+  var maximizeBtn = document.getElementById('maximizeBtn');
+  maximizeBtn.addEventListener('click', function() {
+    var section = logViewerSectionEl;
+    var isMax = section.classList.toggle('maximized');
+    maximizeBtn.textContent = isMax ? 'Restore' : 'Maximize';
+    renderLogViewer();
+  });
+
+  filterDateFromEl.addEventListener('change', applyFilters);
+  filterDateToEl.addEventListener('change', applyFilters);
+  filterTimeFromEl.addEventListener('change', applyFilters);
+  filterTimeToEl.addEventListener('change', applyFilters);
+  filenameInputEl.addEventListener('input', applyFilters);
+  keywordInputEl.addEventListener('input', applyFilters);
+
+  // ----- Upload / worker -----
 
   uploadArea.addEventListener('click', function() { fileInput.click(); });
 
-  // Drag and drop support
   uploadArea.addEventListener('dragover', function(e) {
     e.preventDefault();
     e.stopPropagation();
@@ -125,6 +524,11 @@ h1 { font-size: 20px; margin-bottom: 20px; }
   }
 
   function startParsing(file) {
+    // Reset data model
+    allLogEntries = [];
+    allLogLines = [];
+    filteredLines = [];
+
     // Reset UI
     resultsSection.innerHTML = '';
     errorMsg.style.display = 'none';
@@ -132,6 +536,9 @@ h1 { font-size: 20px; margin-bottom: 20px; }
     progressSection.style.display = 'block';
     progressBar.style.width = '0%';
     statusText.textContent = 'Initializing worker...';
+    filterBarEl.style.display = 'none';
+    logViewerSectionEl.style.display = 'none';
+    filterCountEl.textContent = '';
 
     if (worker) { worker.terminate(); }
     worker = new Worker('decompress-worker.js');
@@ -150,6 +557,11 @@ h1 { font-size: 20px; margin-bottom: 20px; }
           addMarkerFileCard(msg.name, msg.content, msg.size);
           break;
 
+        case 'log-file':
+          var entry = parseLogFile(msg.name, msg.content);
+          allLogEntries.push(entry);
+          break;
+
         case 'done':
           progressBar.style.width = '100%';
           progressText.textContent = '100% - ' + formatSize(msg.totalSize) + ' / ' + formatSize(msg.totalSize);
@@ -160,6 +572,13 @@ h1 { font-size: 20px; margin-bottom: 20px; }
             formatSize(msg.totalUncompressed) + ' uncompressed data processed.';
           worker.terminate();
           worker = null;
+
+          buildAllLogLines();
+          if (allLogLines.length > 0) {
+            filterBarEl.style.display = 'flex';
+            logViewerSectionEl.style.display = 'block';
+            applyFilters();
+          }
           break;
 
         case 'error':
@@ -202,12 +621,6 @@ h1 { font-size: 20px; margin-bottom: 20px; }
     card.appendChild(header);
     card.appendChild(contentDiv);
     resultsSection.appendChild(card);
-  }
-
-  function escapeHtml(str) {
-    var div = document.createElement('div');
-    div.appendChild(document.createTextNode(str));
-    return div.innerHTML;
   }
 })();
 </script>
