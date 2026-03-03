@@ -1,0 +1,7 @@
+{
+  "arm-none-eabi": "/opt/gcc-arm-none-eabi/bin/arm-none-eabi-addr2line",
+  "xtensa-esp32-elf": "/opt/xtensa-esp32-elf/bin/xtensa-esp32-elf-addr2line",
+  "riscv32-unknown-elf": "/opt/riscv/bin/riscv32-unknown-elf-addr2line",
+  "aarch64-linux-gnu": "/usr/bin/aarch64-linux-gnu-addr2line",
+  "x86_64-linux-gnu": "/usr/bin/x86_64-linux-gnu-addr2line"
+}

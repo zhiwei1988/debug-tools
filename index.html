@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Tar.Gz Stream Parser</title>
+<title>Log Parser</title>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f5f5f5; padding: 24px; color: #333; }
@@ -105,17 +105,55 @@ h1 { font-size: 20px; margin-bottom: 20px; }
   position: fixed; top: 0; left: 0; right: 0; bottom: 0;
   z-index: 9999; margin: 0; border-radius: 0;
 }
-#logViewerSection.maximized #logViewport { height: calc(100vh - 45px); }
+#logViewerSection.maximized .log-viewer-body { height: calc(100vh - 45px); }
+#logViewerSection.maximized #logViewport { height: 100%; }
 .maximize-btn {
   background: none; border: 1px solid #ccc; border-radius: 4px;
   padding: 2px 8px; cursor: pointer; font-size: 12px; color: #666;
 }
 .maximize-btn:hover { background: #f0f0f0; }
+
+#bookmarkBar {
+  width: 120px; overflow-y: auto; background: #252526; border-right: 1px solid #333;
+  display: flex; flex-direction: column; gap: 4px; padding: 6px; flex-shrink: 0;
+}
+.bookmark-tag {
+  cursor: pointer; font-size: 11px; padding: 2px 6px; background: #3a3d41;
+  color: #ccc; border-radius: 10px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; display: flex; align-items: center; justify-content: space-between;
+}
+.bookmark-tag:hover { background: #505357; color: #fff; }
+.bookmark-tag .bookmark-del {
+  background: none; border: none; color: #666; cursor: pointer; font-size: 12px;
+  margin-left: 4px; padding: 0; line-height: 1; flex-shrink: 0;
+}
+.bookmark-tag .bookmark-del:hover { color: #d32f2f; }
+.log-viewer-body { display: flex; }
+.log-viewer-body #logViewport { flex: 1; min-width: 0; }
+
+.filter-actions { display: inline-flex; gap: 4px; margin-left: 4px; }
+.filter-dropdown {
+  position: absolute; background: #fff; border: 1px solid #ccc; border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15); max-height: 200px; overflow-y: auto;
+  z-index: 100; min-width: 200px; font-size: 13px;
+}
+.filter-dropdown-item {
+  padding: 6px 28px 6px 10px; cursor: pointer; position: relative;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.filter-dropdown-item:hover { background: #f0f0f0; }
+.filter-dropdown-item .del-btn {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; cursor: pointer; color: #999; font-size: 14px; line-height: 1;
+}
+.filter-dropdown-item .del-btn:hover { color: #d32f2f; }
+.filter-dropdown-empty { padding: 8px 10px; color: #999; font-style: italic; }
 </style>
 </head>
 <body>
 <div class="container">
-  <h1>Tar.Gz Stream Parser</h1>
+  <div style="font-size:13px;margin-bottom:16px;color:#888">Log Parser / <a href="stack-analyzer.html" style="color:#1a73e8;text-decoration:none">Stack Analyzer</a></div>
+  <h1>Log Parser</h1>
 
   <div class="upload-area" id="uploadArea">
     <p>Click to select a .tar / .tar.gz / .tgz file</p>
@@ -138,11 +176,12 @@ h1 { font-size: 20px; margin-bottom: 20px; }
     <label>Date To <input type="date" id="filterDateTo"></label>
     <label>Time From <input type="time" id="filterTimeFrom"></label>
     <label>Time To <input type="time" id="filterTimeTo"></label>
-    <label>Filename <input type="text" id="filenameInput" placeholder="e.g. utas AND (run OR alarm)"></label>
-    <label>Keyword <input type="text" id="keywordInput" placeholder="e.g. &quot;connection timeout&quot; AND error"></label>
+    <label>Filename <input type="text" id="filenameInput" placeholder="e.g. utas AND (run OR alarm)"><span class="filter-actions"><button class="maximize-btn" onclick="saveFilterPrompt('filename')">Save</button><button class="maximize-btn" onclick="showFilterDropdown('filename',this,document.getElementById('filenameInput'))">Load</button></span></label>
+    <label>Keyword <input type="text" id="keywordInput" placeholder="e.g. &quot;connection timeout&quot; AND error"><span class="filter-actions"><button class="maximize-btn" onclick="saveFilterPrompt('keyword')">Save</button><button class="maximize-btn" onclick="showFilterDropdown('keyword',this,document.getElementById('keywordInput'))">Load</button></span></label>
     <label>Before <input type="number" id="contextBefore" value="0" min="0" max="500" style="width:60px"></label>
     <label>After <input type="number" id="contextAfter" value="0" min="0" max="500" style="width:60px"></label>
     <span class="filter-count" id="filterCount"></span>
+    <span style="display:inline-flex;gap:4px;margin-left:8px"><button class="maximize-btn" onclick="exportConfig()">Export</button><button class="maximize-btn" onclick="document.getElementById('importConfigInput').click()">Import</button><input type="file" id="importConfigInput" accept=".json" style="display:none" onchange="importConfig(this.files[0]);this.value=''"></span>
   </div>
 
   <div id="logViewerSection">
@@ -153,8 +192,11 @@ h1 { font-size: 20px; margin-bottom: 20px; }
         <button class="maximize-btn" id="maximizeBtn">Maximize</button>
       </span>
     </div>
-    <div id="logViewport">
-      <div id="logInner"><div id="logContent"></div></div>
+    <div class="log-viewer-body">
+      <div id="bookmarkBar"></div>
+      <div id="logViewport">
+        <div id="logInner"><div id="logContent"></div></div>
+      </div>
     </div>
   </div>
 
@@ -195,6 +237,9 @@ h1 { font-size: 20px; margin-bottom: 20px; }
 
   var LINE_HEIGHT = 20;
   var manualHighlights = [];
+  var bookmarks = [];
+  var lastFilterSignature = '';
+  var bookmarkBarEl = document.getElementById('bookmarkBar');
 
   // ----- Timestamp parsing -----
 
@@ -441,6 +486,13 @@ h1 { font-size: 20px; margin-bottom: 20px; }
     var fnAst = fnInput ? parseKeyword(fnInput) : null;
     var kwInput = keywordInputEl.value.trim();
     var kwAst = kwInput ? parseKeyword(kwInput) : null;
+
+    var sig = dateFromVal + '|' + dateToVal + '|' + fromVal + '|' + toVal + '|' + fnInput + '|' + kwInput + '|' + contextBeforeEl.value + '|' + contextAfterEl.value;
+    if (sig !== lastFilterSignature) {
+      bookmarks = [];
+      renderBookmarks();
+      lastFilterSignature = sig;
+    }
     var hasDateTimeFilter = dateFromVal || dateToVal || fromVal || toVal;
     var hasAnyFilter = fnAst || kwAst || hasDateTimeFilter;
 
@@ -549,6 +601,58 @@ h1 { font-size: 20px; margin-bottom: 20px; }
     logContent.innerHTML = html;
     logViewerStatsEl.textContent = total.toLocaleString() + ' lines / ' + allLogLines.length.toLocaleString() + ' total';
   }
+
+  function renderBookmarks() {
+    bookmarks.sort(function(a, b) { return a.filteredIdx - b.filteredIdx; });
+    bookmarkBarEl.innerHTML = '';
+    for (var i = 0; i < bookmarks.length; i++) {
+      (function(idx) {
+        var bm = bookmarks[idx];
+        var tag = document.createElement('div');
+        tag.className = 'bookmark-tag';
+        tag.title = 'Line ' + (bm.filteredIdx + 1) + ': ' + bm.label;
+        var span = document.createElement('span');
+        span.textContent = bm.label;
+        span.style.cssText = 'overflow:hidden;text-overflow:ellipsis';
+        tag.appendChild(span);
+        var del = document.createElement('button');
+        del.className = 'bookmark-del';
+        del.textContent = '\u00d7';
+        del.addEventListener('click', function(e) {
+          e.stopPropagation();
+          bookmarks.splice(idx, 1);
+          renderBookmarks();
+        });
+        tag.appendChild(del);
+        tag.addEventListener('click', function() {
+          logViewport.scrollTop = bm.filteredIdx * LINE_HEIGHT;
+        });
+        bookmarkBarEl.appendChild(tag);
+      })(i);
+    }
+  }
+
+  logViewport.addEventListener('contextmenu', function(e) {
+    var lineEl = e.target.closest('.log-line');
+    if (!lineEl) return;
+    var selection = window.getSelection();
+    if (selection && !selection.isCollapsed) return;
+    e.preventDefault();
+    var parent = lineEl.parentNode;
+    var children = parent.children;
+    var clickedVisualIdx = -1;
+    for (var i = 0; i < children.length; i++) {
+      if (children[i] === lineEl) { clickedVisualIdx = i; break; }
+    }
+    if (clickedVisualIdx === -1) return;
+    var scrollStart = Math.max(0, Math.floor(logViewport.scrollTop / LINE_HEIGHT) - 5);
+    var filteredIdx = scrollStart + clickedVisualIdx;
+    var label = prompt('Bookmark label:', 'Bookmark ' + (bookmarks.length + 1));
+    if (label === null) return;
+    label = label.trim() || ('Bookmark ' + (bookmarks.length + 1));
+    bookmarks.push({ filteredIdx: filteredIdx, label: label });
+    renderBookmarks();
+  });
 
   logViewport.addEventListener('mouseup', function() {
     var sel = window.getSelection().toString().trim();
@@ -716,6 +820,155 @@ h1 { font-size: 20px; margin-bottom: 20px; }
     resultsSection.appendChild(card);
   }
 })();
+
+// ----- Saved Filters (outside IIFE for onclick access) -----
+
+var CONFIG_KEY = 'web-decompress-config';
+
+function getConfig() {
+  try { return JSON.parse(localStorage.getItem(CONFIG_KEY)) || {}; } catch(e) { return {}; }
+}
+
+function setConfig(cfg) {
+  localStorage.setItem(CONFIG_KEY, JSON.stringify(cfg));
+}
+
+function getSavedFilters(type) {
+  var cfg = getConfig();
+  return (cfg.savedFilters && cfg.savedFilters[type]) || [];
+}
+
+function saveFilter(type, name, value) {
+  var cfg = getConfig();
+  if (!cfg.savedFilters) cfg.savedFilters = {};
+  if (!cfg.savedFilters[type]) cfg.savedFilters[type] = [];
+  cfg.savedFilters[type].push({ name: name, value: value });
+  setConfig(cfg);
+}
+
+function deleteFilter(type, index) {
+  var cfg = getConfig();
+  if (cfg.savedFilters && cfg.savedFilters[type]) {
+    cfg.savedFilters[type].splice(index, 1);
+    setConfig(cfg);
+  }
+}
+
+function saveFilterPrompt(type) {
+  var inputEl = document.getElementById(type === 'keyword' ? 'keywordInput' : 'filenameInput');
+  var value = inputEl.value.trim();
+  if (!value) return;
+  var defaultName = value.length > 20 ? value.substring(0, 20) + '...' : value;
+  var name = prompt('Filter name:', defaultName);
+  if (name === null) return;
+  name = name.trim() || defaultName;
+  saveFilter(type, name, value);
+}
+
+var _activeDropdown = null;
+
+function showFilterDropdown(type, anchorEl, inputEl) {
+  closeFilterDropdown();
+  var filters = getSavedFilters(type);
+  var dd = document.createElement('div');
+  dd.className = 'filter-dropdown';
+
+  if (filters.length === 0) {
+    dd.innerHTML = '<div class="filter-dropdown-empty">No saved filters</div>';
+  } else {
+    for (var i = 0; i < filters.length; i++) {
+      (function(idx) {
+        var item = document.createElement('div');
+        item.className = 'filter-dropdown-item';
+        item.title = filters[idx].value;
+        item.textContent = filters[idx].name;
+        item.addEventListener('click', function(e) {
+          if (e.target.classList.contains('del-btn')) return;
+          inputEl.value = filters[idx].value;
+          inputEl.dispatchEvent(new Event('input'));
+          closeFilterDropdown();
+        });
+        var del = document.createElement('button');
+        del.className = 'del-btn';
+        del.textContent = '\u00d7';
+        del.addEventListener('click', function(e) {
+          e.stopPropagation();
+          deleteFilter(type, idx);
+          closeFilterDropdown();
+          showFilterDropdown(type, anchorEl, inputEl);
+        });
+        item.appendChild(del);
+        dd.appendChild(item);
+      })(i);
+    }
+  }
+
+  var rect = anchorEl.getBoundingClientRect();
+  dd.style.position = 'absolute';
+  dd.style.left = rect.left + 'px';
+  dd.style.top = (rect.bottom + 2) + 'px';
+  document.body.appendChild(dd);
+  _activeDropdown = dd;
+
+  setTimeout(function() {
+    document.addEventListener('click', _closeDropdownHandler);
+  }, 0);
+}
+
+function _closeDropdownHandler(e) {
+  if (_activeDropdown && !_activeDropdown.contains(e.target)) {
+    closeFilterDropdown();
+  }
+}
+
+function closeFilterDropdown() {
+  if (_activeDropdown) {
+    _activeDropdown.remove();
+    _activeDropdown = null;
+    document.removeEventListener('click', _closeDropdownHandler);
+  }
+}
+
+function exportConfig() {
+  var cfg = getConfig();
+  var blob = new Blob([JSON.stringify(cfg, null, 2)], { type: 'application/json' });
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'web-decompress-config.json';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+function importConfig(file) {
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      var imported = JSON.parse(e.target.result);
+      var cfg = getConfig();
+      // merge savedFilters
+      if (imported.savedFilters) {
+        if (!cfg.savedFilters) cfg.savedFilters = {};
+        ['keyword', 'filename'].forEach(function(type) {
+          if (imported.savedFilters[type]) {
+            if (!cfg.savedFilters[type]) cfg.savedFilters[type] = [];
+            // deduplicate by value
+            var existing = {};
+            cfg.savedFilters[type].forEach(function(f) { existing[f.value] = true; });
+            imported.savedFilters[type].forEach(function(f) {
+              if (!existing[f.value]) cfg.savedFilters[type].push(f);
+            });
+          }
+        });
+      }
+      setConfig(cfg);
+      alert('Import successful');
+    } catch(err) {
+      alert('Invalid JSON file');
+    }
+  };
+  reader.readAsText(file);
+}
 </script>
 </body>
 </html>

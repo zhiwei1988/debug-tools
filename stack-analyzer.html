@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stack Analyzer</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f5f5f5; padding: 24px; color: #333; }
+.container { max-width: 900px; margin: 0 auto; }
+.nav { font-size: 13px; margin-bottom: 16px; color: #888; }
+.nav a { color: #555; text-decoration: none; }
+.nav a:hover { text-decoration: underline; }
+h1 { font-size: 20px; margin-bottom: 20px; }
+
+.form-section { background: #fff; border-radius: 8px; padding: 24px; margin-bottom: 16px; }
+.form-row { margin-bottom: 16px; }
+label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #555; }
+select, textarea {
+  width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px;
+  font-size: 14px; font-family: inherit; background: #fafafa;
+}
+select { height: 36px; }
+textarea { height: 200px; resize: vertical; font-family: "Courier New", monospace; font-size: 13px; }
+select.error, textarea.error { border-color: #e53935; }
+
+.file-row { display: flex; align-items: center; gap: 10px; }
+.file-btn {
+  padding: 7px 14px; background: #f0f0f0; border: 1px solid #ccc; border-radius: 6px;
+  cursor: pointer; font-size: 13px; white-space: nowrap;
+}
+.file-btn:hover { background: #e4e4e4; }
+.file-name { font-size: 13px; color: #666; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-name.error { color: #e53935; }
+input[type=file] { display: none; }
+
+.analyze-btn {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 24px; background: #1a73e8; color: #fff; border: none;
+  border-radius: 6px; font-size: 14px; cursor: pointer; font-weight: 600;
+}
+.analyze-btn:hover:not(:disabled) { background: #1558b0; }
+.analyze-btn:disabled { background: #9dbde8; cursor: not-allowed; }
+
+.spinner {
+  width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.4);
+  border-top-color: #fff; border-radius: 50%;
+  animation: spin 0.7s linear infinite; display: none;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.error-msg { color: #e53935; font-size: 13px; margin-top: 12px; display: none; }
+
+.results-section { background: #fff; border-radius: 8px; padding: 24px; display: none; }
+.results-section h2 { font-size: 15px; margin-bottom: 14px; }
+.frame {
+  display: grid; grid-template-columns: 36px 1fr;
+  border-bottom: 1px solid #f0f0f0; padding: 8px 0; gap: 0 12px;
+}
+.frame:last-child { border-bottom: none; }
+.frame-idx { font-size: 12px; color: #aaa; line-height: 1.6; text-align: right; }
+.frame-body { min-width: 0; }
+.frame-fn { font-family: "Courier New", monospace; font-size: 13px; color: #1a73e8; word-break: break-all; }
+.frame-fn.unresolved { color: #aaa; }
+.frame-loc { font-size: 12px; color: #888; margin-top: 2px; word-break: break-all; }
+.frame-orig { font-size: 11px; color: #bbb; margin-top: 2px; font-family: monospace; }
+.unresolved-badge {
+  display: inline-block; font-size: 10px; background: #fff3e0; color: #e65100;
+  border: 1px solid #ffcc80; border-radius: 3px; padding: 1px 5px; margin-left: 6px; vertical-align: middle;
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="nav"><a href="index.html">Tar.Gz Parser</a> / Stack Analyzer</div>
+  <h1>Stack Analyzer</h1>
+
+  <div class="form-section">
+    <div class="form-row">
+      <label for="serverUrl">Server URL</label>
+      <div class="file-row">
+        <input type="text" id="serverUrl" style="flex:1;padding:7px 10px;border:1px solid #ccc;border-radius:6px;font-size:14px" placeholder="http://192.168.1.100:3000">
+        <button class="file-btn" id="connectBtn">Connect</button>
+        <button class="file-btn" id="detectBtn">Detect Toolchains</button>
+        <span id="detectMsg" style="font-size:13px;color:#555"></span>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <label for="toolchain">Toolchain</label>
+      <select id="toolchain">
+        <option value="">-- Connect to server first --</option>
+      </select>
+    </div>
+
+    <div class="form-row">
+      <label for="backtrace">Backtrace Log</label>
+      <textarea id="backtrace" placeholder="Paste backtrace / crash log here..."></textarea>
+    </div>
+
+    <div class="form-row">
+      <label>ELF Binary (with debug symbols)</label>
+      <div class="file-row">
+        <label class="file-btn" for="elfInput">Choose File</label>
+        <input type="file" id="elfInput" accept="*">
+        <span class="file-name" id="fileName">No file chosen</span>
+      </div>
+    </div>
+
+    <button class="analyze-btn" id="analyzeBtn">
+      <div class="spinner" id="spinner"></div>
+      Analyze
+    </button>
+    <div class="error-msg" id="errorMsg"></div>
+  </div>
+
+  <div class="results-section" id="results">
+    <h2>Resolved Stack Trace</h2>
+    <div id="frames"></div>
+  </div>
+</div>
+
+<script>
+const STORAGE_KEY = 'stack-analyzer-server';
+
+const serverUrlEl = document.getElementById('serverUrl');
+const connectBtn = document.getElementById('connectBtn');
+const toolchainEl = document.getElementById('toolchain');
+const backtraceEl = document.getElementById('backtrace');
+const elfInput = document.getElementById('elfInput');
+const fileNameEl = document.getElementById('fileName');
+const analyzeBtn = document.getElementById('analyzeBtn');
+const spinner = document.getElementById('spinner');
+const errorMsg = document.getElementById('errorMsg');
+const resultsEl = document.getElementById('results');
+const framesEl = document.getElementById('frames');
+
+// Restore saved server URL
+serverUrlEl.value = localStorage.getItem(STORAGE_KEY) || '';
+
+function serverUrl() {
+  return serverUrlEl.value.trim().replace(/\/$/, '');
+}
+
+async function loadToolchains() {
+  const url = serverUrl();
+  if (!url) { showError('Please enter the server URL first.'); return; }
+  hideError();
+  toolchainEl.innerHTML = '<option value="">Loading...</option>';
+  try {
+    const res = await fetch(`${url}/api/toolchains`);
+    if (!res.ok) throw new Error('Server error');
+    const { toolchains } = await res.json();
+    toolchainEl.innerHTML = toolchains.length
+      ? '<option value="">Select toolchain...</option>' + toolchains.map(t => `<option value="${t}">${t}</option>`).join('')
+      : '<option value="">No toolchains configured</option>';
+    localStorage.setItem(STORAGE_KEY, url);
+  } catch {
+    toolchainEl.innerHTML = '<option value="">-- Connect to server first --</option>';
+    showError('Cannot reach the analyzer server. Check the URL and make sure the server is running.');
+  }
+}
+
+const detectBtn = document.getElementById('detectBtn');
+const detectMsg = document.getElementById('detectMsg');
+
+connectBtn.addEventListener('click', loadToolchains);
+
+detectBtn.addEventListener('click', async () => {
+  const url = serverUrl();
+  if (!url) { showError('Please enter the server URL first.'); return; }
+  hideError();
+  detectMsg.textContent = 'Detecting...';
+  detectBtn.disabled = true;
+  try {
+    const res = await fetch(`${url}/api/toolchains/detect`, { method: 'POST' });
+    if (!res.ok) throw new Error('Server error');
+    const { found } = await res.json();
+    detectMsg.textContent = found.length ? `Found ${found.length} new toolchain(s)` : 'No new toolchains found';
+    await loadToolchains();
+  } catch (e) {
+    detectMsg.textContent = '';
+    showError('Detection failed: ' + e.message);
+  } finally {
+    detectBtn.disabled = false;
+  }
+});
+// Auto-connect if a saved URL exists
+if (serverUrlEl.value) loadToolchains();
+
+elfInput.addEventListener('change', () => {
+  fileNameEl.textContent = elfInput.files[0] ? elfInput.files[0].name : 'No file chosen';
+  fileNameEl.classList.remove('error');
+});
+
+analyzeBtn.addEventListener('click', analyze);
+
+function validate() {
+  let ok = true;
+  if (!toolchainEl.value) { toolchainEl.classList.add('error'); ok = false; } else toolchainEl.classList.remove('error');
+  if (!backtraceEl.value.trim()) { backtraceEl.classList.add('error'); ok = false; } else backtraceEl.classList.remove('error');
+  if (!elfInput.files[0]) { fileNameEl.classList.add('error'); fileNameEl.textContent = 'Please choose an ELF file'; ok = false; }
+  return ok;
+}
+
+async function analyze() {
+  hideError();
+  if (!validate()) return;
+
+  setLoading(true);
+  resultsEl.style.display = 'none';
+
+  try {
+    const form = new FormData();
+    form.append('toolchain', toolchainEl.value);
+    form.append('backtrace', backtraceEl.value);
+    form.append('elf', elfInput.files[0]);
+
+    const res = await fetch(`${serverUrl()}/api/analyze`, { method: 'POST', body: form });
+    const data = await res.json();
+
+    if (!res.ok) {
+      showError(data.error || 'Server error');
+      return;
+    }
+
+    renderFrames(data.frames);
+  } catch (e) {
+    showError('Network error: ' + e.message);
+  } finally {
+    setLoading(false);
+  }
+}
+
+function renderFrames(frames) {
+  if (!frames.length) {
+    framesEl.innerHTML = '<div style="color:#aaa;font-size:13px">No addresses found in the backtrace log.</div>';
+    resultsEl.style.display = 'block';
+    return;
+  }
+
+  framesEl.innerHTML = frames.map((f, i) => `
+    <div class="frame">
+      <div class="frame-idx">#${i}</div>
+      <div class="frame-body">
+        <div class="frame-fn ${f.resolved ? '' : 'unresolved'}">
+          ${esc(f.function)}
+          ${f.resolved ? '' : '<span class="unresolved-badge">unresolved</span>'}
+        </div>
+        <div class="frame-loc">${esc(f.file)}${f.line ? ':' + f.line : ''}&nbsp;&nbsp;<span style="color:#ccc">${esc(f.address)}</span></div>
+        <div class="frame-orig">${esc(f.originalLine)}</div>
+      </div>
+    </div>
+  `).join('');
+
+  resultsEl.style.display = 'block';
+}
+
+function setLoading(on) {
+  analyzeBtn.disabled = on;
+  spinner.style.display = on ? 'block' : 'none';
+}
+
+function showError(msg) {
+  errorMsg.textContent = msg;
+  errorMsg.style.display = 'block';
+}
+
+function hideError() {
+  errorMsg.style.display = 'none';
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+</script>
+</body>
+</html>
