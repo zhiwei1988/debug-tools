@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tar.Gz Stream Parser</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f5f5f5; padding: 24px; color: #333; }
+.container { max-width: 900px; margin: 0 auto; }
+h1 { font-size: 20px; margin-bottom: 20px; }
+
+.upload-area {
+  background: #fff; border: 2px dashed #ccc; border-radius: 8px;
+  padding: 40px; text-align: center; cursor: pointer; transition: border-color .2s;
+}
+.upload-area:hover { border-color: #666; }
+.upload-area input { display: none; }
+
+.progress-section { display: none; background: #fff; border-radius: 8px; padding: 20px; margin-top: 16px; }
+.progress-bar-outer {
+  height: 20px; background: #e0e0e0; border-radius: 10px; overflow: hidden; margin: 10px 0;
+}
+.progress-bar-inner {
+  height: 100%; width: 0%; background: #4caf50; transition: width .15s; border-radius: 10px;
+}
+.progress-text { font-size: 14px; color: #666; }
+.status-text { font-size: 14px; margin-top: 8px; }
+
+.results-section { margin-top: 16px; }
+.result-card {
+  background: #fff; border-radius: 8px; margin-bottom: 8px; overflow: hidden;
+  border: 1px solid #e0e0e0;
+}
+.result-header {
+  padding: 12px 16px; cursor: pointer; display: flex; justify-content: space-between;
+  align-items: center; font-size: 14px; font-weight: 500; background: #fafafa;
+}
+.result-header:hover { background: #f0f0f0; }
+.result-header .arrow { transition: transform .2s; }
+.result-header.open .arrow { transform: rotate(90deg); }
+.result-content {
+  display: none; padding: 12px 16px; border-top: 1px solid #e0e0e0;
+  max-height: 400px; overflow: auto;
+}
+.result-content pre {
+  white-space: pre-wrap; word-break: break-all; font-size: 13px; line-height: 1.5;
+  font-family: "Cascadia Code", "Fira Code", monospace;
+}
+.result-content.open { display: block; }
+.file-size { font-size: 12px; color: #999; margin-left: 8px; }
+
+.error-msg { color: #d32f2f; margin-top: 12px; font-size: 14px; display: none; }
+.summary { display: none; background: #fff; border-radius: 8px; padding: 16px; margin-top: 16px; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Tar.Gz Stream Parser</h1>
+
+  <div class="upload-area" id="uploadArea">
+    <p>Click to select a .tar.gz / .tgz file</p>
+    <p style="font-size:13px;color:#999;margin-top:8px;">Supports 10GB+ files, parsed locally in the browser</p>
+    <input type="file" id="fileInput" accept=".tgz,application/gzip,application/x-gzip,application/x-compressed-tar">
+  </div>
+
+  <div class="progress-section" id="progressSection">
+    <div class="progress-bar-outer"><div class="progress-bar-inner" id="progressBar"></div></div>
+    <div class="progress-text" id="progressText">0% - 0 MB / 0 MB</div>
+    <div class="status-text" id="statusText">Initializing...</div>
+  </div>
+
+  <div class="error-msg" id="errorMsg"></div>
+
+  <div class="summary" id="summary"></div>
+
+  <div class="results-section" id="resultsSection"></div>
+</div>
+
+<script>
+(function() {
+  var fileInput = document.getElementById('fileInput');
+  var uploadArea = document.getElementById('uploadArea');
+  var progressSection = document.getElementById('progressSection');
+  var progressBar = document.getElementById('progressBar');
+  var progressText = document.getElementById('progressText');
+  var statusText = document.getElementById('statusText');
+  var errorMsg = document.getElementById('errorMsg');
+  var resultsSection = document.getElementById('resultsSection');
+  var summaryEl = document.getElementById('summary');
+  var worker = null;
+
+  uploadArea.addEventListener('click', function() { fileInput.click(); });
+
+  // Drag and drop support
+  uploadArea.addEventListener('dragover', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    uploadArea.style.borderColor = '#666';
+  });
+  uploadArea.addEventListener('dragleave', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    uploadArea.style.borderColor = '#ccc';
+  });
+  uploadArea.addEventListener('drop', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    uploadArea.style.borderColor = '#ccc';
+    var file = e.dataTransfer.files[0];
+    if (file) startParsing(file);
+  });
+
+  fileInput.addEventListener('change', function() {
+    var file = fileInput.files[0];
+    if (!file) return;
+    startParsing(file);
+  });
+
+  function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+    return (bytes / 1073741824).toFixed(2) + ' GB';
+  }
+
+  function startParsing(file) {
+    // Reset UI
+    resultsSection.innerHTML = '';
+    errorMsg.style.display = 'none';
+    summaryEl.style.display = 'none';
+    progressSection.style.display = 'block';
+    progressBar.style.width = '0%';
+    statusText.textContent = 'Initializing worker...';
+
+    if (worker) { worker.terminate(); }
+    worker = new Worker('decompress-worker.js');
+
+    worker.onmessage = function(e) {
+      var msg = e.data;
+      switch (msg.type) {
+        case 'progress':
+          var pct = msg.percent.toFixed(1);
+          progressBar.style.width = pct + '%';
+          progressText.textContent = pct + '% - ' + formatSize(msg.bytesRead) + ' / ' + formatSize(msg.totalSize);
+          statusText.textContent = 'Decompressing and parsing... (' + msg.filesFound + ' files found)';
+          break;
+
+        case 'marker-file':
+          addMarkerFileCard(msg.name, msg.content, msg.size);
+          break;
+
+        case 'done':
+          progressBar.style.width = '100%';
+          progressText.textContent = '100% - ' + formatSize(msg.totalSize) + ' / ' + formatSize(msg.totalSize);
+          statusText.textContent = 'Done!';
+          summaryEl.style.display = 'block';
+          summaryEl.textContent = 'Completed: ' + msg.totalFiles + ' files scanned, ' +
+            msg.markerFiles + ' marker files extracted, ' +
+            formatSize(msg.totalUncompressed) + ' uncompressed data processed.';
+          worker.terminate();
+          worker = null;
+          break;
+
+        case 'error':
+          errorMsg.textContent = 'Error: ' + msg.message;
+          errorMsg.style.display = 'block';
+          statusText.textContent = 'Failed';
+          if (worker) { worker.terminate(); worker = null; }
+          break;
+      }
+    };
+
+    worker.onerror = function(e) {
+      errorMsg.textContent = 'Worker error: ' + e.message;
+      errorMsg.style.display = 'block';
+      statusText.textContent = 'Failed';
+    };
+
+    worker.postMessage({ type: 'start', file: file });
+  }
+
+  function addMarkerFileCard(name, content, size) {
+    var card = document.createElement('div');
+    card.className = 'result-card';
+
+    var header = document.createElement('div');
+    header.className = 'result-header';
+    header.innerHTML = '<span>' + escapeHtml(name) + '<span class="file-size">' + formatSize(size) + '</span></span><span class="arrow">&#9654;</span>';
+
+    var contentDiv = document.createElement('div');
+    contentDiv.className = 'result-content';
+    var pre = document.createElement('pre');
+    pre.textContent = content;
+    contentDiv.appendChild(pre);
+
+    header.addEventListener('click', function() {
+      header.classList.toggle('open');
+      contentDiv.classList.toggle('open');
+    });
+
+    card.appendChild(header);
+    card.appendChild(contentDiv);
+    resultsSection.appendChild(card);
+  }
+
+  function escapeHtml(str) {
+    var div = document.createElement('div');
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
+  }
+})();
+</script>
+</body>
+</html>
