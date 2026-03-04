@@ -115,7 +115,10 @@ input[type=file] { display: none; }
   </div>
 
   <div class="results-section" id="results">
-    <h2>Resolved Stack Trace</h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <h2 style="margin-bottom:0">Resolved Stack Trace</h2>
+      <button class="file-btn" id="exportBtn">Export</button>
+    </div>
     <div id="frames"></div>
   </div>
 </div>
@@ -134,6 +137,8 @@ const spinner = document.getElementById('spinner');
 const errorMsg = document.getElementById('errorMsg');
 const resultsEl = document.getElementById('results');
 const framesEl = document.getElementById('frames');
+const exportBtn = document.getElementById('exportBtn');
+let lastFrames = [];
 
 // Restore saved server URL
 serverUrlEl.value = localStorage.getItem(STORAGE_KEY) || '';
@@ -243,6 +248,7 @@ async function analyze() {
 }
 
 function renderFrames(frames) {
+  lastFrames = frames;
   if (!frames.length) {
     framesEl.innerHTML = '<div style="color:#aaa;font-size:13px">No addresses found in the backtrace log.</div>';
     resultsEl.style.display = 'block';
@@ -279,6 +285,21 @@ function showError(msg) {
 function hideError() {
   errorMsg.style.display = 'none';
 }
+
+exportBtn.addEventListener('click', () => {
+  if (!lastFrames.length) return;
+  const text = lastFrames.map((f, i) => {
+    const loc = `${f.function} at ${f.file}${f.line ? ':' + f.line : ''}  (${f.address})`;
+    return `#${i}  ${loc}${f.resolved ? '' : '  [unresolved]'}`;
+  }).join('\n');
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'stack-trace.txt';
+  a.click();
+  URL.revokeObjectURL(url);
+});
 
 function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
