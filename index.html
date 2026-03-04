@@ -654,16 +654,25 @@ h1 { font-size: 20px; margin-bottom: 20px; }
     renderBookmarks();
   });
 
+  var pendingHighlightRender = false;
   logViewport.addEventListener('mouseup', function() {
     var sel = window.getSelection().toString().trim();
     if (sel.length >= 2) {
       var lower = sel.toLowerCase();
       var exists = manualHighlights.some(function(h) { return h.toLowerCase() === lower; });
       if (!exists) manualHighlights.push(sel);
+      // Defer re-render to preserve selection for copy
+      pendingHighlightRender = true;
     } else {
       manualHighlights = [];
+      renderLogViewer();
     }
-    renderLogViewer();
+  });
+  logViewport.addEventListener('mousedown', function() {
+    if (pendingHighlightRender) {
+      pendingHighlightRender = false;
+      renderLogViewer();
+    }
   });
 
   logViewport.addEventListener('scroll', function() { renderLogViewer(); });
