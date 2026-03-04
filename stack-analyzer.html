@@ -99,10 +99,10 @@ input[type=file] { display: none; }
     </div>
 
     <div class="form-row">
-      <label>ELF Binary (with debug symbols)</label>
+      <label>ELF Binaries (with debug symbols)</label>
       <div class="file-row">
-        <label class="file-btn" for="elfInput">Choose File</label>
-        <input type="file" id="elfInput" accept="*">
+        <label class="file-btn" for="elfInput">Choose Files</label>
+        <input type="file" id="elfInput" accept="*" multiple>
         <span class="file-name" id="fileName">No file chosen</span>
       </div>
     </div>
@@ -189,7 +189,15 @@ detectBtn.addEventListener('click', async () => {
 if (serverUrlEl.value) loadToolchains();
 
 elfInput.addEventListener('change', () => {
-  fileNameEl.textContent = elfInput.files[0] ? elfInput.files[0].name : 'No file chosen';
+  const files = elfInput.files;
+  if (files.length === 0) {
+    fileNameEl.textContent = 'No file chosen';
+  } else if (files.length === 1) {
+    fileNameEl.textContent = files[0].name;
+  } else {
+    const names = Array.from(files).map(f => f.name).join(', ');
+    fileNameEl.textContent = `${names} (${files.length} files)`;
+  }
   fileNameEl.classList.remove('error');
 });
 
@@ -199,7 +207,7 @@ function validate() {
   let ok = true;
   if (!toolchainEl.value) { toolchainEl.classList.add('error'); ok = false; } else toolchainEl.classList.remove('error');
   if (!backtraceEl.value.trim()) { backtraceEl.classList.add('error'); ok = false; } else backtraceEl.classList.remove('error');
-  if (!elfInput.files[0]) { fileNameEl.classList.add('error'); fileNameEl.textContent = 'Please choose an ELF file'; ok = false; }
+  if (elfInput.files.length === 0) { fileNameEl.classList.add('error'); fileNameEl.textContent = 'Please choose at least one ELF file'; ok = false; }
   return ok;
 }
 
@@ -214,7 +222,9 @@ async function analyze() {
     const form = new FormData();
     form.append('toolchain', toolchainEl.value);
     form.append('backtrace', backtraceEl.value);
-    form.append('elf', elfInput.files[0]);
+    for (const f of elfInput.files) {
+      form.append('elf', f);
+    }
 
     const res = await fetch(`${serverUrl()}/api/analyze`, { method: 'POST', body: form });
     const data = await res.json();
