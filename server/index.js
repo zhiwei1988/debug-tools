@@ -99,6 +99,155 @@ function parseAddr2lineOutput(stdout, addresses) {
   });
 }
 
+// --- Exception Info Parser ---
+
+const EXCEPTION_INFO_START = /^=+\s*Exception Info\s*=+$/;
+const EXCEPTION_INFO_END = /^=+\s*Exception Info Done\s*=+$/;
+
+function parseExceptionInfo(log) {
+  const lines = log.split('\n');
+
+  let startIdx = -1, endIdx = -1;
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    if (startIdx < 0 && EXCEPTION_INFO_START.test(trimmed)) {
+      startIdx = i;
+    } else if (startIdx >= 0 && EXCEPTION_INFO_END.test(trimmed)) {
+      endIdx = i;
+      break;
+    }
+  }
+
+  if (startIdx < 0 || endIdx < 0) return null;
+
+  const block = lines.slice(startIdx + 1, endIdx);
+
+  let signal = 0;
+  const signalMatch = block.join('\n').match(/Receive signal:\s*(\d+)/);
+  if (signalMatch) signal = parseInt(signalMatch[1], 10);
+
+  // Split into sections by dashed headers like "----Regs----"
+  const sections = {};
+  let currentSection = '_header';
+  sections[currentSection] = [];
+
+  for (const line of block) {
+    const headerMatch = line.trim().match(/^-{3,}\s*(.+?)\s*-{3,}$/);
+    if (headerMatch) {
+      currentSection = headerMatch[1].toLowerCase();
+      sections[currentSection] = [];
+    } else {
+      if (!sections[currentSection]) sections[currentSection] = [];
+      sections[currentSection].push(line);
+    }
+  }
+
+  // Parse registers from Regs section
+  const regs = {};
+  const regsLines = sections['regs'] || [];
+  const regPattern = /(\w+)\s*:\s*([0-9a-fA-F]{8,16})(?=\s|$)/g;
+  for (const line of regsLines) {
+    let m;
+    while ((m = regPattern.exec(line)) !== null) {
+      regs[m[1].toLowerCase()] = m[2].toLowerCase();
+    }
+    regPattern.lastIndex = 0;
+  }
+
+  // Parse memory maps
+  const maps = [];
+  const mapsLines = sections['maps'] || [];
+  const mapPattern = /^([0-9a-f]+)-([0-9a-f]+)\s+(\S+)\s+([0-9a-f]+)\s+\S+\s+\d+\s*(.*)/;
+  for (const line of mapsLines) {
+    const m = line.trim().match(mapPattern);
+    if (m) {
+      maps.push({
+        start: BigInt('0x' + m[1]),
+        end: BigInt('0x' + m[2]),
+        perms: m[3],
+        offset: BigInt('0x' + m[4]),
+        path: m[5].trim(),
+      });
+    }
+  }
+
+  // Parse SP stack dump values (right side of "->")
+  const stackValues = [];
+  const stackLines = sections['arm sp stack info'] || [];
+  const stackLinePattern = /^0x[0-9a-fA-F]+\s*->\s*(.+)/;
+  for (const line of stackLines) {
+    const m = line.trim().match(stackLinePattern);
+    if (m) {
+      for (const val of m[1].trim().split(/\s+/)) {
+        if (/^[0-9a-fA-F]{8,16}$/.test(val)) {
+          stackValues.push(val.toLowerCase());
+        }
+      }
+    }
+  }
+
+  return { signal, regs, maps, stackValues };
+}
+
+function manualUnwind(exInfo, elfFilename) {
+  const elfBase = path.basename(elfFilename);
+  const execMaps = exInfo.maps.filter(m => m.perms.includes('x'));
+  const elfMaps = execMaps.filter(m => m.path && path.basename(m.path) === elfBase);
+
+  const entries = [];
+  const unresolvedFrames = [];
+  const seen = new Set();
+  let order = 0;
+
+  // Candidates ordered: arm_pc first, arm_lr second, then stack dump values
+  const candidates = [];
+  if (exInfo.regs.arm_pc) candidates.push({ hex: exInfo.regs.arm_pc, source: 'arm_pc' });
+  if (exInfo.regs.arm_lr) candidates.push({ hex: exInfo.regs.arm_lr, source: 'arm_lr' });
+  for (const val of exInfo.stackValues) {
+    candidates.push({ hex: val, source: 'stack' });
+  }
+
+  for (const cand of candidates) {
+    const addr = BigInt('0x' + cand.hex);
+    if (addr === 0n) continue;
+
+    const mapEntry = execMaps.find(m => addr >= m.start && addr < m.end);
+    if (!mapEntry) continue;
+
+    if (seen.has(cand.hex)) continue;
+    seen.add(cand.hex);
+
+    const isOurBinary = elfMaps.some(m => addr >= m.start && addr < m.end);
+    const runtimeAddr = '0x' + cand.hex;
+
+    if (isOurBinary) {
+      const offset = addr - mapEntry.start + mapEntry.offset;
+      entries.push({
+        address: '0x' + offset.toString(16),
+        line: `[${cand.source}] runtime ${runtimeAddr} in ${mapEntry.path}`,
+        _order: order++,
+      });
+    } else {
+      unresolvedFrames.push({
+        address: runtimeAddr,
+        originalLine: `[${cand.source}] runtime ${runtimeAddr} in ${mapEntry.path}`,
+        function: '??',
+        file: mapEntry.path,
+        line: 0,
+        resolved: false,
+        _order: order++,
+      });
+    }
+  }
+
+  return { entries, unresolvedFrames };
+}
+
+// Strip Exception Info block so parseBacktrace won't pick up noise addresses from it
+function stripExceptionInfoBlock(log) {
+  return log.replace(/=+\s*Exception Info\s*=+[\s\S]*?=+\s*Exception Info Done\s*=+/g, '');
+}
+
 // --- Routes ---
 
 app.get('/api/toolchains', (req, res) => {
@@ -170,25 +319,52 @@ app.post('/api/analyze', upload.single('elf'), async (req, res) => {
 
     const addr2linePath = toolchains[toolchain];
 
-    // Parse backtrace
-    const entries = parseBacktrace(backtrace);
-    if (entries.length === 0) {
+    // Parse backtrace: try structured formats first, strip Exception Info block
+    // to avoid picking up noise addresses from the stack dump section
+    const hasExInfo = /=+\s*Exception Info\s*=+/.test(backtrace);
+    let entries = parseBacktrace(hasExInfo ? stripExceptionInfoBlock(backtrace) : backtrace);
+    let unresolvedFrames = [];
+
+    // Fallback: Exception Info format with manual stack unwinding
+    if (entries.length === 0 && hasExInfo) {
+      const exInfo = parseExceptionInfo(backtrace);
+      if (exInfo) {
+        const result = manualUnwind(exInfo, elfFile.originalname || '');
+        entries = result.entries;
+        unresolvedFrames = result.unresolvedFrames;
+      }
+    }
+
+    if (entries.length === 0 && unresolvedFrames.length === 0) {
       return res.json({ frames: [] });
     }
 
-    const addresses = entries.map(e => e.address);
+    let resolvedFrames = [];
+    if (entries.length > 0) {
+      const addresses = entries.map(e => e.address);
 
-    // Invoke addr2line via execFile (no shell)
-    const output = await new Promise((resolve, reject) => {
-      const args = ['-e', elfFile.path, '-f', '-C', '-p', ...addresses];
-      execFile(addr2linePath, args, { timeout: 30000 }, (err, stdout, stderr) => {
-        if (err && err.killed) return reject(new Error('addr2line timed out'));
-        if (err) return reject(new Error(stderr || err.message));
-        resolve(stdout);
+      // Invoke addr2line via execFile (no shell)
+      const output = await new Promise((resolve, reject) => {
+        const args = ['-e', elfFile.path, '-f', '-C', '-p', ...addresses];
+        execFile(addr2linePath, args, { timeout: 30000 }, (err, stdout, stderr) => {
+          if (err && err.killed) return reject(new Error('addr2line timed out'));
+          if (err) return reject(new Error(stderr || err.message));
+          resolve(stdout);
+        });
       });
-    });
 
-    const frames = parseAddr2lineOutput(output, entries);
+      resolvedFrames = parseAddr2lineOutput(output, entries);
+      for (let i = 0; i < resolvedFrames.length; i++) {
+        if (entries[i]._order !== undefined) resolvedFrames[i]._order = entries[i]._order;
+      }
+    }
+
+    // Merge resolved and unresolved frames, preserving manual-unwind order
+    const allFrames = [...unresolvedFrames, ...resolvedFrames];
+    if (unresolvedFrames.length > 0) {
+      allFrames.sort((a, b) => (a._order ?? 0) - (b._order ?? 0));
+    }
+    const frames = allFrames.map(({ _order, ...rest }) => rest);
     res.json({ frames });
 
   } catch (err) {
