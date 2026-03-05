@@ -135,7 +135,7 @@ function handleFileEntry(name, data, depth) {
         }
       }
     } catch (e) {
-      // silently skip corrupt gz files
+      self.postMessage({ type: 'warn', name: name, message: e.message || String(e) });
     }
   } else if (cat === 'tgz') {
     if (depth < 2) {
@@ -151,7 +151,7 @@ function handleFileEntry(name, data, depth) {
           self.postMessage({ type: 'log-file', name: displayName, content: content, size: inflated.length });
         }
       } catch (e) {
-        // silently skip corrupt tgz files
+        self.postMessage({ type: 'warn', name: name, message: e.message || String(e) });
       }
     }
   } else if (cat === 'zip') {
@@ -159,7 +159,7 @@ function handleFileEntry(name, data, depth) {
       try {
         processZipBuffer(data, depth + 1);
       } catch (e) {
-        // silently skip corrupt zip files
+        self.postMessage({ type: 'warn', name: name, message: e.message || String(e) });
       }
     }
   } else if (cat === 'marker') {

@@ -787,6 +787,10 @@ h1 { font-size: 20px; margin-bottom: 20px; }
           }
           break;
 
+        case 'warn':
+          console.warn('[decompress] ' + msg.name + ': ' + msg.message);
+          break;
+
         case 'error':
           errorMsg.textContent = 'Error: ' + msg.message;
           errorMsg.style.display = 'block';
