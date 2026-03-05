@@ -492,19 +492,21 @@ app.post('/api/files/upload', fileUpload.array('files'), (req, res) => {
 });
 
 app.post('/api/files/mkdir', express.json(), (req, res) => {
-  const abs = safePath(req.body.path);
+  const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+  const abs = safePath(body.path);
   if (!abs) return res.status(403).json({ error: 'Access denied' });
 
   try {
     fs.mkdirSync(abs, { recursive: true });
-    res.json({ created: req.body.path });
+    res.json({ created: body.path });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
 app.delete('/api/files/delete', express.json(), (req, res) => {
-  const abs = safePath(req.body.path);
+  const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+  const abs = safePath(body.path);
   if (!abs) return res.status(403).json({ error: 'Access denied' });
   if (abs === FILE_ROOT) return res.status(403).json({ error: 'Cannot delete root' });
 
@@ -515,7 +517,7 @@ app.delete('/api/files/delete', express.json(), (req, res) => {
     } else {
       fs.unlinkSync(abs);
     }
-    res.json({ deleted: req.body.path });
+    res.json({ deleted: body.path });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
