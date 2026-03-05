@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>File Browser</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f5f5f5; padding: 24px; color: #333; }
+.container { max-width: 900px; margin: 0 auto; }
+.nav { font-size: 13px; margin-bottom: 16px; color: #888; }
+.nav a { color: #555; text-decoration: none; }
+.nav a:hover { text-decoration: underline; }
+h1 { font-size: 20px; margin-bottom: 20px; }
+
+.form-section { background: #fff; border-radius: 8px; padding: 24px; margin-bottom: 16px; }
+.form-row { margin-bottom: 16px; }
+label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #555; }
+.file-row { display: flex; align-items: center; gap: 10px; }
+.file-btn {
+  padding: 7px 14px; background: #f0f0f0; border: 1px solid #ccc; border-radius: 6px;
+  cursor: pointer; font-size: 13px; white-space: nowrap;
+}
+.file-btn:hover { background: #e4e4e4; }
+.file-btn.danger { color: #e53935; }
+.file-btn.danger:hover { background: #fce4ec; }
+
+.root-info { font-size: 13px; color: #888; margin-bottom: 16px; display: none; }
+.breadcrumb { font-size: 13px; margin-bottom: 12px; color: #888; }
+.breadcrumb a { color: #1a73e8; text-decoration: none; cursor: pointer; }
+.breadcrumb a:hover { text-decoration: underline; }
+.toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+
+.file-table { width: 100%; border-collapse: collapse; }
+.file-table th { text-align: left; font-size: 12px; color: #888; font-weight: 600; padding: 6px 8px; border-bottom: 2px solid #eee; }
+.file-table td { padding: 7px 8px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
+.file-table tr:hover { background: #fafafa; }
+.file-table .name-cell a { color: #1a73e8; text-decoration: none; cursor: pointer; }
+.file-table .name-cell a:hover { text-decoration: underline; }
+.file-table .icon { display: inline-block; width: 20px; text-align: center; margin-right: 4px; }
+.file-table .size-cell, .file-table .time-cell { color: #888; white-space: nowrap; }
+.file-table .action-cell { white-space: nowrap; }
+.file-table .action-cell button { margin-left: 4px; }
+
+.error-msg { color: #e53935; font-size: 13px; margin-top: 12px; display: none; }
+.content-section { background: #fff; border-radius: 8px; padding: 24px; display: none; }
+input[type=file] { display: none; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="nav"><a href="index.html">Log Parser</a> / <a href="stack-analyzer.html">Stack Analyzer</a> / File Browser</div>
+  <h1>File Browser</h1>
+
+  <div class="form-section">
+    <div class="form-row">
+      <label for="serverUrl">Server URL</label>
+      <div class="file-row">
+        <input type="text" id="serverUrl" style="flex:1;padding:7px 10px;border:1px solid #ccc;border-radius:6px;font-size:14px" placeholder="http://192.168.1.100:3000">
+        <button class="file-btn" id="connectBtn">Connect</button>
+      </div>
+    </div>
+    <div class="error-msg" id="errorMsg"></div>
+  </div>
+
+  <div class="root-info" id="rootInfo"></div>
+
+  <div class="content-section" id="content">
+    <div class="breadcrumb" id="breadcrumb"></div>
+    <div class="toolbar">
+      <label class="file-btn" for="uploadInput">Upload</label>
+      <input type="file" id="uploadInput" multiple>
+      <button class="file-btn" id="mkdirBtn">New Folder</button>
+    </div>
+    <table class="file-table">
+      <thead><tr><th>Name</th><th style="width:90px">Size</th><th style="width:150px">Modified</th><th style="width:120px">Action</th></tr></thead>
+      <tbody id="fileList"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const STORAGE_KEY = 'file-browser-server';
+const serverUrlEl = document.getElementById('serverUrl');
+const connectBtn = document.getElementById('connectBtn');
+const errorMsgEl = document.getElementById('errorMsg');
+const rootInfoEl = document.getElementById('rootInfo');
+const contentEl = document.getElementById('content');
+const breadcrumbEl = document.getElementById('breadcrumb');
+const fileListEl = document.getElementById('fileList');
+const uploadInput = document.getElementById('uploadInput');
+const mkdirBtn = document.getElementById('mkdirBtn');
+
+let currentPath = '.';
+
+serverUrlEl.value = localStorage.getItem(STORAGE_KEY) || '';
+
+function serverUrl() {
+  return serverUrlEl.value.trim().replace(/\/$/, '');
+}
+
+function showError(msg) { errorMsgEl.textContent = msg; errorMsgEl.style.display = 'block'; }
+function hideError() { errorMsgEl.style.display = 'none'; }
+
+connectBtn.addEventListener('click', connect);
+if (serverUrlEl.value) connect();
+
+async function connect() {
+  const url = serverUrl();
+  if (!url) { showError('Please enter the server URL first.'); return; }
+  hideError();
+  try {
+    const res = await fetch(`${url}/api/files/root`);
+    if (!res.ok) throw new Error('Server error');
+    const data = await res.json();
+    rootInfoEl.textContent = 'Root: ' + data.root;
+    rootInfoEl.style.display = 'block';
+    contentEl.style.display = 'block';
+    localStorage.setItem(STORAGE_KEY, url);
+    currentPath = '.';
+    loadDir('.');
+  } catch {
+    rootInfoEl.style.display = 'none';
+    contentEl.style.display = 'none';
+    showError('Cannot reach the server. Check the URL and make sure the server is running.');
+  }
+}
+
+async function loadDir(rel) {
+  currentPath = rel;
+  hideError();
+  try {
+    const res = await fetch(`${serverUrl()}/api/files/list?path=${encodeURIComponent(rel)}`);
+    if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Server error'); }
+    const data = await res.json();
+    renderBreadcrumb(rel);
+    renderTable(data.entries, rel);
+  } catch (e) {
+    showError('Load failed: ' + e.message);
+  }
+}
+
+function renderBreadcrumb(rel) {
+  const parts = rel === '.' ? [] : rel.split('/').filter(Boolean);
+  let html = '<a onclick="loadDir(\'.\')">ROOT</a>';
+  let acc = '';
+  for (const p of parts) {
+    acc = acc ? acc + '/' + p : p;
+    html += ' / <a onclick="loadDir(\'' + esc(acc) + '\')">' + esc(p) + '</a>';
+  }
+  breadcrumbEl.innerHTML = html;
+}
+
+function renderTable(entries, rel) {
+  let html = '';
+  if (rel !== '.') {
+    const parent = rel.includes('/') ? rel.substring(0, rel.lastIndexOf('/')) : '.';
+    html += '<tr><td class="name-cell" colspan="4"><span class="icon">..</span><a onclick="loadDir(\'' + esc(parent) + '\')">..</a></td></tr>';
+  }
+  for (const e of entries) {
+    const entryPath = rel === '.' ? e.name : rel + '/' + e.name;
+    const escapedPath = esc(entryPath);
+    html += '<tr>';
+    if (e.type === 'dir') {
+      html += '<td class="name-cell"><span class="icon">&#128193;</span><a onclick="loadDir(\'' + escapedPath + '\')">' + esc(e.name) + '/</a></td>';
+      html += '<td class="size-cell">-</td>';
+    } else {
+      html += '<td class="name-cell"><span class="icon">&#128196;</span>' + esc(e.name) + '</td>';
+      html += '<td class="size-cell">' + formatSize(e.size) + '</td>';
+    }
+    html += '<td class="time-cell">' + formatTime(e.mtime) + '</td>';
+    html += '<td class="action-cell">';
+    if (e.type === 'file') {
+      html += '<button class="file-btn" onclick="download(\'' + escapedPath + '\')">Download</button>';
+    }
+    html += '<button class="file-btn danger" onclick="remove(\'' + escapedPath + '\')">Delete</button>';
+    html += '</td></tr>';
+  }
+  if (entries.length === 0 && rel === '.') {
+    html += '<tr><td colspan="4" style="color:#aaa;text-align:center;padding:20px">Empty directory</td></tr>';
+  }
+  fileListEl.innerHTML = html;
+}
+
+function download(rel) {
+  window.open(`${serverUrl()}/api/files/download?path=${encodeURIComponent(rel)}`, '_blank');
+}
+
+uploadInput.addEventListener('change', async () => {
+  if (uploadInput.files.length === 0) return;
+  const form = new FormData();
+  form.append('path', currentPath);
+  for (const f of uploadInput.files) form.append('files', f);
+  try {
+    const res = await fetch(`${serverUrl()}/api/files/upload`, { method: 'POST', body: form });
+    if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Upload failed'); }
+    loadDir(currentPath);
+  } catch (e) {
+    showError('Upload failed: ' + e.message);
+  }
+  uploadInput.value = '';
+});
+
+mkdirBtn.addEventListener('click', async () => {
+  const name = prompt('Folder name:');
+  if (!name) return;
+  const newPath = currentPath === '.' ? name : currentPath + '/' + name;
+  try {
+    const res = await fetch(`${serverUrl()}/api/files/mkdir`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: newPath }),
+    });
+    if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed'); }
+    loadDir(currentPath);
+  } catch (e) {
+    showError('Create folder failed: ' + e.message);
+  }
+});
+
+async function remove(rel) {
+  if (!confirm('Delete "' + rel + '"?')) return;
+  try {
+    const res = await fetch(`${serverUrl()}/api/files/delete`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: rel }),
+    });
+    if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Failed'); }
+    loadDir(currentPath);
+  } catch (e) {
+    showError('Delete failed: ' + e.message);
+  }
+}
+
+function formatSize(bytes) {
+  if (bytes === 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  const val = bytes / Math.pow(1024, i);
+  return (i === 0 ? val : val.toFixed(1)) + ' ' + units[i];
+}
+
+function formatTime(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso);
+  const pad = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
+</script>
+</body>
+</html>

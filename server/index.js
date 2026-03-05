@@ -9,6 +9,17 @@ const os = require('os');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Load config
+const CONFIG_PATH = path.join(__dirname, 'config.json');
+let config = {};
+try { config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch(e) {}
+const FILE_ROOT = path.resolve(__dirname, config.fileRoot || '.');
+
+function safePath(rel) {
+  var abs = path.resolve(FILE_ROOT, path.normalize(rel || '.'));
+  return abs === FILE_ROOT || abs.startsWith(FILE_ROOT + path.sep) ? abs : null;
+}
+
 // Load toolchain config
 const TOOLCHAINS_PATH = path.join(__dirname, 'toolchains.json');
 let toolchains = {};
@@ -412,6 +423,101 @@ app.post('/api/analyze', upload.array('elf'), async (req, res) => {
     }
   } finally {
     cleanup();
+  }
+});
+
+// --- File Browser API ---
+
+const fileUpload = multer({ dest: os.tmpdir(), limits: { fileSize: 500 * 1024 * 1024 } });
+
+app.get('/api/files/root', (req, res) => {
+  res.json({ root: FILE_ROOT });
+});
+
+app.get('/api/files/list', (req, res) => {
+  const abs = safePath(req.query.path);
+  if (!abs) return res.status(403).json({ error: 'Access denied' });
+
+  try {
+    const stat = fs.statSync(abs);
+    if (!stat.isDirectory()) return res.status(400).json({ error: 'Not a directory' });
+
+    const entries = fs.readdirSync(abs).map(name => {
+      try {
+        const s = fs.statSync(path.join(abs, name));
+        return { name, type: s.isDirectory() ? 'dir' : 'file', size: s.size, mtime: s.mtime.toISOString() };
+      } catch { return { name, type: 'unknown', size: 0, mtime: '' }; }
+    });
+
+    entries.sort((a, b) => {
+      if (a.type === 'dir' && b.type !== 'dir') return -1;
+      if (a.type !== 'dir' && b.type === 'dir') return 1;
+      return a.name.localeCompare(b.name);
+    });
+
+    res.json({ path: req.query.path || '.', entries });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/files/download', (req, res) => {
+  const abs = safePath(req.query.path);
+  if (!abs) return res.status(403).json({ error: 'Access denied' });
+
+  try {
+    const stat = fs.statSync(abs);
+    if (!stat.isFile()) return res.status(400).json({ error: 'Not a file' });
+    res.download(abs);
+  } catch (e) {
+    res.status(404).json({ error: e.message });
+  }
+});
+
+app.post('/api/files/upload', fileUpload.array('files'), (req, res) => {
+  const destDir = safePath(req.body.path);
+  if (!destDir) return res.status(403).json({ error: 'Access denied' });
+
+  try {
+    if (!fs.statSync(destDir).isDirectory()) return res.status(400).json({ error: 'Not a directory' });
+  } catch { return res.status(400).json({ error: 'Target directory does not exist' }); }
+
+  const uploaded = [];
+  for (const f of (req.files || [])) {
+    const target = path.join(destDir, f.originalname);
+    fs.renameSync(f.path, target);
+    uploaded.push(f.originalname);
+  }
+  res.json({ uploaded });
+});
+
+app.post('/api/files/mkdir', express.json(), (req, res) => {
+  const abs = safePath(req.body.path);
+  if (!abs) return res.status(403).json({ error: 'Access denied' });
+
+  try {
+    fs.mkdirSync(abs, { recursive: true });
+    res.json({ created: req.body.path });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.delete('/api/files/delete', express.json(), (req, res) => {
+  const abs = safePath(req.body.path);
+  if (!abs) return res.status(403).json({ error: 'Access denied' });
+  if (abs === FILE_ROOT) return res.status(403).json({ error: 'Cannot delete root' });
+
+  try {
+    const stat = fs.statSync(abs);
+    if (stat.isDirectory()) {
+      fs.rmSync(abs, { recursive: true });
+    } else {
+      fs.unlinkSync(abs);
+    }
+    res.json({ deleted: req.body.path });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
