@@ -274,6 +274,8 @@ h1 { font-size: 20px; margin-bottom: 20px; }
   var downloadCountEl = document.getElementById('downloadCount');
   var downloadListEl = document.getElementById('downloadList');
   var worker = null;
+  var pendingDone = null;
+  var finalizeTimer = null;
 
   var allLogEntries = [];
   var allLogLines = [];
@@ -739,6 +741,28 @@ h1 { font-size: 20px; margin-bottom: 20px; }
   contextBeforeEl.addEventListener('input', applyFilters);
   contextAfterEl.addEventListener('input', applyFilters);
 
+  // ----- Deferred finalization (wait for all worker messages) -----
+
+  function checkFinalize() {
+    if (!pendingDone) return;
+    if (allFiles.length < pendingDone.totalFiles) return;
+    if (finalizeTimer) { clearTimeout(finalizeTimer); finalizeTimer = null; }
+    pendingDone = null;
+    if (worker) { worker.terminate(); worker = null; }
+
+    if (allFiles.length > 0) {
+      downloadSectionEl.style.display = 'block';
+      renderDownloadList();
+    }
+
+    buildAllLogLines();
+    if (allLogLines.length > 0) {
+      filterBarEl.style.display = 'flex';
+      logViewerSectionEl.style.display = 'block';
+      applyFilters();
+    }
+  }
+
   // ----- Upload / worker -----
 
   uploadArea.addEventListener('click', function() { fileInput.click(); });
@@ -780,6 +804,8 @@ h1 { font-size: 20px; margin-bottom: 20px; }
     allLogLines = [];
     filteredLines = [];
     allFiles = [];
+    pendingDone = null;
+    if (finalizeTimer) { clearTimeout(finalizeTimer); finalizeTimer = null; }
 
     // Reset UI
     resultsSection.innerHTML = '';
@@ -809,12 +835,14 @@ h1 { font-size: 20px; margin-bottom: 20px; }
         case 'marker-file':
           allFiles.push({ name: msg.name, content: msg.content, size: msg.size });
           addMarkerFileCard(msg.name, msg.content, msg.size);
+          checkFinalize();
           break;
 
         case 'log-file':
           allFiles.push({ name: msg.name, content: msg.content, size: msg.size });
           var entry = parseLogFile(msg.name, msg.content);
           allLogEntries.push(entry);
+          checkFinalize();
           break;
 
         case 'done':
@@ -825,20 +853,25 @@ h1 { font-size: 20px; margin-bottom: 20px; }
           summaryEl.textContent = 'Completed: ' + msg.totalFiles + ' files scanned, ' +
             msg.markerFiles + ' marker files extracted, ' +
             formatSize(msg.totalUncompressed) + ' uncompressed data processed.';
-          worker.terminate();
-          worker = null;
-
-          if (allFiles.length > 0) {
-            downloadSectionEl.style.display = 'block';
-            renderDownloadList();
-          }
-
-          buildAllLogLines();
-          if (allLogLines.length > 0) {
-            filterBarEl.style.display = 'flex';
-            logViewerSectionEl.style.display = 'block';
-            applyFilters();
-          }
+          pendingDone = msg;
+          finalizeTimer = setTimeout(function() {
+            finalizeTimer = null;
+            if (pendingDone) {
+              pendingDone = null;
+              if (worker) { worker.terminate(); worker = null; }
+              if (allFiles.length > 0) {
+                downloadSectionEl.style.display = 'block';
+                renderDownloadList();
+              }
+              buildAllLogLines();
+              if (allLogLines.length > 0) {
+                filterBarEl.style.display = 'flex';
+                logViewerSectionEl.style.display = 'block';
+                applyFilters();
+              }
+            }
+          }, 2000);
+          checkFinalize();
           break;
 
         case 'warn':
