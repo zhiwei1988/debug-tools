@@ -148,6 +148,37 @@ h1 { font-size: 20px; margin-bottom: 20px; }
 }
 .filter-dropdown-item .del-btn:hover { color: #d32f2f; }
 .filter-dropdown-empty { padding: 8px 10px; color: #999; font-style: italic; }
+
+#downloadSection {
+  display: none; background: #fff; border-radius: 8px; margin-top: 16px;
+  border: 1px solid #e0e0e0;
+}
+.download-header {
+  padding: 12px 16px; border-bottom: 1px solid #e0e0e0;
+  font-size: 14px; font-weight: 500;
+  display: flex; justify-content: space-between; align-items: center; gap: 12px;
+}
+.download-header input {
+  font-size: 13px; padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; width: 240px;
+}
+.download-count { font-size: 12px; color: #999; flex-shrink: 0; }
+.download-list { max-height: 400px; overflow-y: auto; }
+.download-item {
+  padding: 8px 16px; display: flex; justify-content: space-between; align-items: center;
+  font-size: 13px; border-bottom: 1px solid #f0f0f0;
+}
+.download-item:last-child { border-bottom: none; }
+.download-item:hover { background: #fafafa; }
+.download-item-name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.download-item .file-size { flex-shrink: 0; }
+.download-btn {
+  background: none; border: 1px solid #ccc; border-radius: 4px;
+  padding: 2px 8px; cursor: pointer; font-size: 12px; color: #666;
+  flex-shrink: 0; margin-left: 8px;
+}
+.download-btn:hover { background: #f0f0f0; }
 </style>
 </head>
 <body>
@@ -170,6 +201,15 @@ h1 { font-size: 20px; margin-bottom: 20px; }
   <div class="error-msg" id="errorMsg"></div>
 
   <div class="summary" id="summary"></div>
+
+  <div id="downloadSection">
+    <div class="download-header">
+      <span>File Downloads</span>
+      <input type="text" id="downloadFilter" placeholder="Filter by filename, e.g. log AND (run OR alarm)">
+      <span class="download-count" id="downloadCount"></span>
+    </div>
+    <div class="download-list" id="downloadList"></div>
+  </div>
 
   <div class="filter-bar" id="filterBar">
     <label>Date From <input type="date" id="filterDateFrom"></label>
@@ -229,11 +269,16 @@ h1 { font-size: 20px; margin-bottom: 20px; }
   var logViewerStatsEl = document.getElementById('logViewerStats');
   var contextBeforeEl = document.getElementById('contextBefore');
   var contextAfterEl = document.getElementById('contextAfter');
+  var downloadSectionEl = document.getElementById('downloadSection');
+  var downloadFilterEl = document.getElementById('downloadFilter');
+  var downloadCountEl = document.getElementById('downloadCount');
+  var downloadListEl = document.getElementById('downloadList');
   var worker = null;
 
   var allLogEntries = [];
   var allLogLines = [];
   var filteredLines = [];
+  var allFiles = [];
 
   var LINE_HEIGHT = 20;
   var manualHighlights = [];
@@ -734,6 +779,7 @@ h1 { font-size: 20px; margin-bottom: 20px; }
     allLogEntries = [];
     allLogLines = [];
     filteredLines = [];
+    allFiles = [];
 
     // Reset UI
     resultsSection.innerHTML = '';
@@ -744,6 +790,7 @@ h1 { font-size: 20px; margin-bottom: 20px; }
     statusText.textContent = 'Initializing worker...';
     filterBarEl.style.display = 'none';
     logViewerSectionEl.style.display = 'none';
+    downloadSectionEl.style.display = 'none';
     filterCountEl.textContent = '';
 
     if (worker) { worker.terminate(); }
@@ -760,10 +807,12 @@ h1 { font-size: 20px; margin-bottom: 20px; }
           break;
 
         case 'marker-file':
+          allFiles.push({ name: msg.name, content: msg.content, size: msg.size });
           addMarkerFileCard(msg.name, msg.content, msg.size);
           break;
 
         case 'log-file':
+          allFiles.push({ name: msg.name, content: msg.content, size: msg.size });
           var entry = parseLogFile(msg.name, msg.content);
           allLogEntries.push(entry);
           break;
@@ -778,6 +827,11 @@ h1 { font-size: 20px; margin-bottom: 20px; }
             formatSize(msg.totalUncompressed) + ' uncompressed data processed.';
           worker.terminate();
           worker = null;
+
+          if (allFiles.length > 0) {
+            downloadSectionEl.style.display = 'block';
+            renderDownloadList();
+          }
 
           buildAllLogLines();
           if (allLogLines.length > 0) {
@@ -832,6 +886,54 @@ h1 { font-size: 20px; margin-bottom: 20px; }
     card.appendChild(contentDiv);
     resultsSection.appendChild(card);
   }
+
+  // ----- File download -----
+
+  function downloadFile(file) {
+    var blob = new Blob([file.content], { type: 'application/octet-stream' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = shortName(file.name);
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function renderDownloadList() {
+    var filterInput = downloadFilterEl.value.trim();
+    var filterAst = filterInput ? parseKeyword(filterInput) : null;
+    var filtered = [];
+    for (var i = 0; i < allFiles.length; i++) {
+      var file = allFiles[i];
+      if (filterAst && !evalAST(filterAst, file.name.toLowerCase())) continue;
+      filtered.push(file);
+    }
+    downloadCountEl.textContent = filtered.length + ' / ' + allFiles.length + ' files';
+    downloadListEl.innerHTML = '';
+    for (var i = 0; i < filtered.length; i++) {
+      (function(file) {
+        var item = document.createElement('div');
+        item.className = 'download-item';
+        var nameSpan = document.createElement('span');
+        nameSpan.className = 'download-item-name';
+        nameSpan.textContent = file.name;
+        nameSpan.title = file.name;
+        var sizeSpan = document.createElement('span');
+        sizeSpan.className = 'file-size';
+        sizeSpan.textContent = formatSize(file.size);
+        var btn = document.createElement('button');
+        btn.className = 'download-btn';
+        btn.textContent = 'Download';
+        btn.addEventListener('click', function() { downloadFile(file); });
+        item.appendChild(nameSpan);
+        item.appendChild(sizeSpan);
+        item.appendChild(btn);
+        downloadListEl.appendChild(item);
+      })(filtered[i]);
+    }
+  }
+
+  downloadFilterEl.addEventListener('input', renderDownloadList);
 })();
 
 // ----- Saved Filters (outside IIFE for onclick access) -----
