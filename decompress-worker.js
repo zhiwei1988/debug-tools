@@ -1,6 +1,7 @@
 /* Web Worker: streaming tar / tar.gz decompression and tar FSM parsing */
 
 importScripts('https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js');
+importScripts('https://cdn.jsdelivr.net/npm/fflate@0.8.2/umd/index.js');
 
 var CHUNK_SIZE = 10 * 1024 * 1024; // 10MB read chunks
 
@@ -15,6 +16,7 @@ var headerOffset = 0;
 var curName = '';
 var curSize = 0;
 var curCat = null;
+var curIsRegular = false;
 var dataRemaining = 0;
 var paddingRemaining = 0;
 var curChunks = [];
@@ -30,6 +32,7 @@ function getFileCategory(name) {
   var lower = name.toLowerCase();
   if (lower.substr(lower.length - 4) === '.tgz') return 'tgz';
   if (lower.substr(lower.length - 3) === '.gz') return 'gz';
+  if (lower.substr(lower.length - 4) === '.zip') return 'zip';
   if (lower.substr(lower.length - 4) === '.log' || lower.substr(lower.length - 4) === '.bin') return 'log';
   var markerExts = ['.txt', '.csv', '.json', '.xml', '.cfg', '.ini', '.yml', '.yaml', '.md', '.conf', '.properties'];
   for (var i = 0; i < markerExts.length; i++) {
@@ -87,18 +90,42 @@ function combineChunks(chunks) {
   return combined;
 }
 
+function isLikelyText(data) {
+  var sampleLen = data.length < 8192 ? data.length : 8192;
+  if (sampleLen === 0) return false;
+  var printable = 0;
+  for (var i = 0; i < sampleLen; i++) {
+    var b = data[i];
+    if (b === 0x09 || b === 0x0a || b === 0x0d || (b >= 0x20 && b <= 0x7e)) printable++;
+  }
+  return (printable / sampleLen) >= 0.95;
+}
+
 function handleFileEntry(name, data, depth) {
   var cat = getFileCategory(name);
   if (cat === 'log') {
+    totalFiles++;
     var content = decoder.decode(data);
     self.postMessage({ type: 'log-file', name: name, content: content, size: data.length });
   } else if (cat === 'gz') {
     try {
       var inflated = pako.inflate(data);
-      var content = decoder.decode(inflated);
-      // strip .gz from display name
-      var displayName = name.substr(0, name.length - 3);
-      self.postMessage({ type: 'log-file', name: displayName, content: content, size: inflated.length });
+      var innerName = name.substr(0, name.length - 3);
+      var innerCat = getFileCategory(innerName);
+      if (innerCat === 'tgz') {
+        if (depth < 2) processTarBuffer(inflated, depth + 1);
+      } else if (innerCat === 'zip') {
+        if (depth < 2) processZipBuffer(inflated, depth + 1);
+      } else {
+        totalFiles++;
+        var content = decoder.decode(inflated);
+        if (innerCat === 'marker') {
+          markerFilesCount++;
+          self.postMessage({ type: 'marker-file', name: innerName, content: content, size: inflated.length });
+        } else {
+          self.postMessage({ type: 'log-file', name: innerName, content: content, size: inflated.length });
+        }
+      }
     } catch (e) {
       // silently skip corrupt gz files
     }
@@ -111,10 +138,34 @@ function handleFileEntry(name, data, depth) {
         // silently skip corrupt tgz files
       }
     }
+  } else if (cat === 'zip') {
+    if (depth < 2) {
+      try {
+        processZipBuffer(data, depth + 1);
+      } catch (e) {
+        // silently skip corrupt zip files
+      }
+    }
   } else if (cat === 'marker') {
+    totalFiles++;
     var content = decoder.decode(data);
     markerFilesCount++;
     self.postMessage({ type: 'marker-file', name: name, content: content, size: data.length });
+  } else if (cat === null) {
+    if (isLikelyText(data)) {
+      totalFiles++;
+      var content = decoder.decode(data);
+      self.postMessage({ type: 'log-file', name: name, content: content, size: data.length });
+    }
+  }
+}
+
+function processZipBuffer(data, depth) {
+  var files = fflate.unzipSync(data);
+  for (var fname in files) {
+    if (!files.hasOwnProperty(fname)) continue;
+    if (fname.charAt(fname.length - 1) === '/') continue;
+    handleFileEntry(fname, files[fname], depth);
   }
 }
 
@@ -129,6 +180,7 @@ function processTarBuffer(data, depth) {
   var lName = '';
   var lSize = 0;
   var lCat = null;
+  var lIsRegular = false;
   var lDataRemaining = 0;
   var lPaddingRemaining = 0;
   var lChunks = [];
@@ -149,10 +201,8 @@ function processTarBuffer(data, depth) {
         lName = parseFileName(lHeaderBuf);
         lSize = parseOctal(lHeaderBuf, 124, 12);
         var typeFlag = lHeaderBuf[156];
-        var isRegular = (typeFlag === 48 || typeFlag === 0);
-        lCat = isRegular ? getFileCategory(lName) : null;
-
-        if (isRegular && lCat !== null) totalFiles++;
+        lIsRegular = (typeFlag === 48 || typeFlag === 0);
+        lCat = lIsRegular ? getFileCategory(lName) : null;
 
         lDataRemaining = lSize;
         var blocks = Math.ceil(lSize / 512);
@@ -162,7 +212,7 @@ function processTarBuffer(data, depth) {
           lChunks = [];
           lState = STATE_DATA;
         } else {
-          if (isRegular && lCat !== null) {
+          if (lIsRegular) {
             handleFileEntry(lName, new Uint8Array(0), depth);
           }
           lState = lPaddingRemaining > 0 ? STATE_PADDING : STATE_HEADER;
@@ -172,7 +222,7 @@ function processTarBuffer(data, depth) {
       var avail = len - pos;
       var take = avail < lDataRemaining ? avail : lDataRemaining;
 
-      if (lCat !== null) {
+      if (lIsRegular) {
         lChunks.push(data.slice(pos, pos + take));
       }
 
@@ -180,7 +230,7 @@ function processTarBuffer(data, depth) {
       pos += take;
 
       if (lDataRemaining === 0) {
-        if (lCat !== null) {
+        if (lIsRegular) {
           var combined = combineChunks(lChunks);
           handleFileEntry(lName, combined, depth);
           lChunks = [];
@@ -219,10 +269,8 @@ function processTarStream(data) {
         curName = parseFileName(headerBuf);
         curSize = parseOctal(headerBuf, 124, 12);
         var typeFlag = headerBuf[156];
-        var isRegular = (typeFlag === 48 || typeFlag === 0);
-        curCat = isRegular ? getFileCategory(curName) : null;
-
-        if (isRegular && curCat !== null) totalFiles++;
+        curIsRegular = (typeFlag === 48 || typeFlag === 0);
+        curCat = curIsRegular ? getFileCategory(curName) : null;
 
         dataRemaining = curSize;
         var blocks = Math.ceil(curSize / 512);
@@ -232,7 +280,7 @@ function processTarStream(data) {
           curChunks = [];
           state = STATE_DATA;
         } else {
-          if (isRegular && curCat !== null) {
+          if (curIsRegular) {
             handleFileEntry(curName, new Uint8Array(0), 0);
           }
           state = paddingRemaining > 0 ? STATE_PADDING : STATE_HEADER;
@@ -242,7 +290,7 @@ function processTarStream(data) {
       var avail = len - pos;
       var take = avail < dataRemaining ? avail : dataRemaining;
 
-      if (curCat !== null) {
+      if (curIsRegular) {
         curChunks.push(data.slice(pos, pos + take));
       }
 
@@ -250,7 +298,7 @@ function processTarStream(data) {
       pos += take;
 
       if (dataRemaining === 0) {
-        if (curCat !== null) {
+        if (curIsRegular) {
           var combined = combineChunks(curChunks);
           handleFileEntry(curName, combined, 0);
           curChunks = [];
@@ -278,10 +326,22 @@ function processFile(file) {
   var totalSize = file.size;
   var offset = 0;
   var isGzip = false;
+  var isZip = false;
   var inflator = null;
+  var zipChunks = [];
 
   function readNextChunk() {
     if (offset >= totalSize) {
+      if (isZip) {
+        try {
+          var fullData = combineChunks(zipChunks);
+          totalUncompressed += fullData.length;
+          processZipBuffer(fullData, 0);
+        } catch (e) {
+          self.postMessage({ type: 'error', message: 'Zip decompression failed: ' + e.message });
+        }
+        zipChunks = [];
+      }
       self.postMessage({
         type: 'done',
         totalSize: totalSize,
@@ -303,6 +363,8 @@ function processFile(file) {
     // Detect format on first chunk
     if (offset === 0) {
       isGzip = (chunk.length >= 2 && chunk[0] === 0x1f && chunk[1] === 0x8b);
+      isZip = (!isGzip && chunk.length >= 4 &&
+               chunk[0] === 0x50 && chunk[1] === 0x4b && chunk[2] === 0x03 && chunk[3] === 0x04);
       if (isGzip) {
         inflator = new pako.Inflate();
         inflator.onData = function(decompressed) {
@@ -318,7 +380,9 @@ function processFile(file) {
 
     offset = end;
 
-    if (isGzip) {
+    if (isZip) {
+      zipChunks.push(chunk);
+    } else if (isGzip) {
       var isLast = (offset >= totalSize);
       inflator.push(chunk, isLast);
     } else {
