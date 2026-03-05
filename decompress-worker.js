@@ -16,7 +16,6 @@ var headerOffset = 0;
 var curName = '';
 var curSize = 0;
 var curCat = null;
-var curIsRegular = false;
 var dataRemaining = 0;
 var paddingRemaining = 0;
 var curChunks = [];
@@ -28,18 +27,29 @@ var totalUncompressed = 0;
 
 var decoder = new TextDecoder('utf-8', { fatal: false });
 
+var BLACKLIST_EXTS = [
+  '.o', '.so', '.a', '.elf', '.exe', '.dll', '.dylib', '.lib', '.obj',
+  '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.svg', '.webp',
+  '.mp4', '.avi', '.mov', '.mkv', '.mp3', '.wav', '.flac',
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  '.class', '.pyc', '.wasm', '.swp'
+];
+
 function getFileCategory(name) {
   var lower = name.toLowerCase();
   if (lower.substr(lower.length - 4) === '.tgz') return 'tgz';
   if (lower.substr(lower.length - 3) === '.gz') return 'gz';
   if (lower.substr(lower.length - 4) === '.zip') return 'zip';
-  if (lower.substr(lower.length - 4) === '.log' || lower.substr(lower.length - 4) === '.bin') return 'log';
+  for (var i = 0; i < BLACKLIST_EXTS.length; i++) {
+    var ext = BLACKLIST_EXTS[i];
+    if (lower.length > ext.length && lower.substr(lower.length - ext.length) === ext) return null;
+  }
   var markerExts = ['.txt', '.csv', '.json', '.xml', '.cfg', '.ini', '.yml', '.yaml', '.md', '.conf', '.properties'];
   for (var i = 0; i < markerExts.length; i++) {
     var ext = markerExts[i];
     if (lower.length > ext.length && lower.substr(lower.length - ext.length) === ext) return 'marker';
   }
-  return null;
+  return 'log';
 }
 
 function parseOctal(buf, offset, len) {
@@ -90,17 +100,6 @@ function combineChunks(chunks) {
   return combined;
 }
 
-function isLikelyText(data) {
-  var sampleLen = data.length < 8192 ? data.length : 8192;
-  if (sampleLen === 0) return false;
-  var printable = 0;
-  for (var i = 0; i < sampleLen; i++) {
-    var b = data[i];
-    if (b === 0x09 || b === 0x0a || b === 0x0d || (b >= 0x20 && b <= 0x7e)) printable++;
-  }
-  return (printable / sampleLen) >= 0.95;
-}
-
 function handleFileEntry(name, data, depth) {
   var cat = getFileCategory(name);
   if (cat === 'log') {
@@ -116,7 +115,7 @@ function handleFileEntry(name, data, depth) {
         if (depth < 2) processTarBuffer(inflated, depth + 1);
       } else if (innerCat === 'zip') {
         if (depth < 2) processZipBuffer(inflated, depth + 1);
-      } else {
+      } else if (innerCat !== null) {
         totalFiles++;
         var content = decoder.decode(inflated);
         if (innerCat === 'marker') {
@@ -151,12 +150,6 @@ function handleFileEntry(name, data, depth) {
     var content = decoder.decode(data);
     markerFilesCount++;
     self.postMessage({ type: 'marker-file', name: name, content: content, size: data.length });
-  } else if (cat === null) {
-    if (isLikelyText(data)) {
-      totalFiles++;
-      var content = decoder.decode(data);
-      self.postMessage({ type: 'log-file', name: name, content: content, size: data.length });
-    }
   }
 }
 
@@ -180,7 +173,6 @@ function processTarBuffer(data, depth) {
   var lName = '';
   var lSize = 0;
   var lCat = null;
-  var lIsRegular = false;
   var lDataRemaining = 0;
   var lPaddingRemaining = 0;
   var lChunks = [];
@@ -201,8 +193,8 @@ function processTarBuffer(data, depth) {
         lName = parseFileName(lHeaderBuf);
         lSize = parseOctal(lHeaderBuf, 124, 12);
         var typeFlag = lHeaderBuf[156];
-        lIsRegular = (typeFlag === 48 || typeFlag === 0);
-        lCat = lIsRegular ? getFileCategory(lName) : null;
+        var isRegular = (typeFlag === 48 || typeFlag === 0);
+        lCat = isRegular ? getFileCategory(lName) : null;
 
         lDataRemaining = lSize;
         var blocks = Math.ceil(lSize / 512);
@@ -212,7 +204,7 @@ function processTarBuffer(data, depth) {
           lChunks = [];
           lState = STATE_DATA;
         } else {
-          if (lIsRegular) {
+          if (isRegular && lCat !== null) {
             handleFileEntry(lName, new Uint8Array(0), depth);
           }
           lState = lPaddingRemaining > 0 ? STATE_PADDING : STATE_HEADER;
@@ -222,7 +214,7 @@ function processTarBuffer(data, depth) {
       var avail = len - pos;
       var take = avail < lDataRemaining ? avail : lDataRemaining;
 
-      if (lIsRegular) {
+      if (lCat !== null) {
         lChunks.push(data.slice(pos, pos + take));
       }
 
@@ -230,7 +222,7 @@ function processTarBuffer(data, depth) {
       pos += take;
 
       if (lDataRemaining === 0) {
-        if (lIsRegular) {
+        if (lCat !== null) {
           var combined = combineChunks(lChunks);
           handleFileEntry(lName, combined, depth);
           lChunks = [];
@@ -269,8 +261,8 @@ function processTarStream(data) {
         curName = parseFileName(headerBuf);
         curSize = parseOctal(headerBuf, 124, 12);
         var typeFlag = headerBuf[156];
-        curIsRegular = (typeFlag === 48 || typeFlag === 0);
-        curCat = curIsRegular ? getFileCategory(curName) : null;
+        var isRegular = (typeFlag === 48 || typeFlag === 0);
+        curCat = isRegular ? getFileCategory(curName) : null;
 
         dataRemaining = curSize;
         var blocks = Math.ceil(curSize / 512);
@@ -280,7 +272,7 @@ function processTarStream(data) {
           curChunks = [];
           state = STATE_DATA;
         } else {
-          if (curIsRegular) {
+          if (isRegular && curCat !== null) {
             handleFileEntry(curName, new Uint8Array(0), 0);
           }
           state = paddingRemaining > 0 ? STATE_PADDING : STATE_HEADER;
@@ -290,7 +282,7 @@ function processTarStream(data) {
       var avail = len - pos;
       var take = avail < dataRemaining ? avail : dataRemaining;
 
-      if (curIsRegular) {
+      if (curCat !== null) {
         curChunks.push(data.slice(pos, pos + take));
       }
 
@@ -298,7 +290,7 @@ function processTarStream(data) {
       pos += take;
 
       if (dataRemaining === 0) {
-        if (curIsRegular) {
+        if (curCat !== null) {
           var combined = combineChunks(curChunks);
           handleFileEntry(curName, combined, 0);
           curChunks = [];
