@@ -112,7 +112,16 @@ function handleFileEntry(name, data, depth) {
       var innerName = name.substr(0, name.length - 3);
       var innerCat = getFileCategory(innerName);
       if (innerCat === 'tgz') {
-        if (depth < 2) processTarBuffer(inflated, depth + 1);
+        if (depth < 2) {
+          var filesBefore = totalFiles;
+          processTarBuffer(inflated, depth + 1);
+          if (totalFiles === filesBefore) {
+            totalFiles++;
+            var tgzInnerName = innerName.substr(0, innerName.length - 4);
+            var content = decoder.decode(inflated);
+            self.postMessage({ type: 'log-file', name: tgzInnerName, content: content, size: inflated.length });
+          }
+        }
       } else if (innerCat === 'zip') {
         if (depth < 2) processZipBuffer(inflated, depth + 1);
       } else if (innerCat !== null) {
@@ -132,7 +141,15 @@ function handleFileEntry(name, data, depth) {
     if (depth < 2) {
       try {
         var inflated = pako.inflate(data);
+        var filesBefore = totalFiles;
         processTarBuffer(inflated, depth + 1);
+        if (totalFiles === filesBefore) {
+          // Not a valid tar inside, treat inflated data as single log file
+          totalFiles++;
+          var displayName = name.substr(0, name.length - 4);
+          var content = decoder.decode(inflated);
+          self.postMessage({ type: 'log-file', name: displayName, content: content, size: inflated.length });
+        }
       } catch (e) {
         // silently skip corrupt tgz files
       }
