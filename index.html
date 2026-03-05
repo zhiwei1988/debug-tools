@@ -4,43 +4,43 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Log Parser</title>
+<link rel="stylesheet" href="common.css">
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f5f5f5; padding: 24px; color: #333; }
-.container { max-width: 900px; margin: 0 auto; }
-h1 { font-size: 20px; margin-bottom: 20px; }
-
 .upload-area {
-  background: #fff; border: 2px dashed #ccc; border-radius: 8px;
-  padding: 40px; text-align: center; cursor: pointer; transition: border-color .2s;
+  background: var(--color-surface); border: 2px dashed var(--color-border); border-radius: var(--radius-md);
+  padding: 40px; text-align: center; cursor: pointer; transition: border-color var(--transition);
+  box-shadow: var(--shadow-sm);
 }
-.upload-area:hover { border-color: #666; }
-.upload-area input { display: none; }
+.upload-area:hover { border-color: var(--color-text-secondary); }
 
-.progress-section { display: none; background: #fff; border-radius: 8px; padding: 20px; margin-top: 16px; }
+.progress-section {
+  display: none; background: var(--color-surface); border-radius: var(--radius-md);
+  padding: 20px; margin-top: 16px; box-shadow: var(--shadow-sm);
+}
 .progress-bar-outer {
-  height: 20px; background: #e0e0e0; border-radius: 10px; overflow: hidden; margin: 10px 0;
+  height: 20px; background: var(--color-bg); border-radius: 10px; overflow: hidden; margin: 10px 0;
 }
 .progress-bar-inner {
-  height: 100%; width: 0%; background: #4caf50; transition: width .15s; border-radius: 10px;
+  height: 100%; width: 0%; background: var(--color-primary); transition: width .15s; border-radius: 10px;
 }
-.progress-text { font-size: 14px; color: #666; }
+.progress-text { font-size: 14px; color: var(--color-text-secondary); }
 .status-text { font-size: 14px; margin-top: 8px; }
 
 .results-section { margin-top: 16px; }
 .result-card {
-  background: #fff; border-radius: 8px; margin-bottom: 8px; overflow: hidden;
-  border: 1px solid #e0e0e0;
+  background: var(--color-surface); border-radius: var(--radius-md); margin-bottom: 8px; overflow: hidden;
+  box-shadow: var(--shadow-sm); border: none;
 }
 .result-header {
   padding: 12px 16px; cursor: pointer; display: flex; justify-content: space-between;
-  align-items: center; font-size: 14px; font-weight: 500; background: #fafafa;
+  align-items: center; font-size: 14px; font-weight: 500; background: var(--color-bg);
+  transition: background var(--transition);
 }
-.result-header:hover { background: #f0f0f0; }
-.result-header .arrow { transition: transform .2s; }
+.result-header:hover { background: #ececee; }
+.result-header .arrow { transition: transform var(--transition); }
 .result-header.open .arrow { transform: rotate(90deg); }
 .result-content {
-  display: none; padding: 12px 16px; border-top: 1px solid #e0e0e0;
+  display: none; padding: 12px 16px; border-top: 1px solid var(--color-border);
   max-height: 400px; overflow: auto;
 }
 .result-content pre {
@@ -48,53 +48,39 @@ h1 { font-size: 20px; margin-bottom: 20px; }
   font-family: "Cascadia Code", "Fira Code", monospace;
 }
 .result-content.open { display: block; }
-.file-size { font-size: 12px; color: #999; margin-left: 8px; }
+.file-size { font-size: 12px; color: var(--color-text-secondary); margin-left: 8px; }
 
-.error-msg { color: #d32f2f; margin-top: 12px; font-size: 14px; display: none; }
-.summary { display: none; background: #fff; border-radius: 8px; padding: 16px; margin-top: 16px; font-size: 14px; }
+.summary {
+  display: none; background: var(--color-surface); border-radius: var(--radius-md);
+  padding: 16px; margin-top: 16px; font-size: 14px; box-shadow: var(--shadow-sm);
+}
 
 .filter-bar {
-  display: none;
-  background: #fff;
-  border-radius: 8px;
-  padding: 12px 16px;
-  margin-top: 16px;
-  gap: 12px;
-  align-items: center;
-  flex-wrap: wrap;
+  display: none; background: var(--color-surface); border-radius: var(--radius-md);
+  padding: 12px 16px; margin-top: 16px; gap: 12px;
+  align-items: center; flex-wrap: wrap; box-shadow: var(--shadow-sm);
 }
-.filter-bar label { font-size: 13px; color: #666; }
-.filter-bar input { font-size: 13px; padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; }
+.filter-bar label { font-size: 13px; color: var(--color-text-secondary); }
+.filter-bar input { font-size: 13px; padding: 4px 8px; }
 #keywordInput { width: 280px; }
-.filter-count { font-size: 13px; color: #666; margin-left: auto; }
+.filter-count { font-size: 13px; color: var(--color-text-secondary); margin-left: auto; }
 
-#logViewerSection { display: none; background: #fff; border-radius: 8px; margin-top: 16px; }
-.log-viewer-header {
-  padding: 12px 16px;
-  border-bottom: 1px solid #e0e0e0;
-  font-size: 14px;
-  font-weight: 500;
-  display: flex;
-  justify-content: space-between;
+#logViewerSection {
+  display: none; background: var(--color-surface); border-radius: var(--radius-md);
+  margin-top: 16px; box-shadow: var(--shadow-sm); overflow: hidden;
 }
+.log-viewer-header {
+  padding: 12px 16px; border-bottom: 1px solid var(--color-border);
+  font-size: 14px; font-weight: 500; display: flex; justify-content: space-between;
+}
+/* Log viewer dark theme - keep as-is */
 #logViewport {
-  height: 600px;
-  overflow: auto;
-  position: relative;
-  font-family: monospace;
-  font-size: 13px;
-  background: #1e1e1e;
-  color: #d4d4d4;
+  height: 600px; overflow: auto; position: relative;
+  font-family: monospace; font-size: 13px; background: #1e1e1e; color: #d4d4d4;
 }
 #logInner { position: relative; min-width: fit-content; }
 #logContent { position: absolute; left: 0; right: 0; top: 0; }
-.log-line {
-  height: 20px;
-  line-height: 20px;
-  padding: 0 8px;
-  white-space: nowrap;
-  display: flex;
-}
+.log-line { height: 20px; line-height: 20px; padding: 0 8px; white-space: nowrap; display: flex; }
 .log-line:hover { background: rgba(255,255,255,0.05); }
 .log-src { color: #666; font-size: 11px; margin-right: 8px; flex-shrink: 0; }
 .log-text { white-space: pre; }
@@ -107,11 +93,6 @@ h1 { font-size: 20px; margin-bottom: 20px; }
 }
 #logViewerSection.maximized .log-viewer-body { height: calc(100vh - 45px); }
 #logViewerSection.maximized #logViewport { height: 100%; }
-.maximize-btn {
-  background: none; border: 1px solid #ccc; border-radius: 4px;
-  padding: 2px 8px; cursor: pointer; font-size: 12px; color: #666;
-}
-.maximize-btn:hover { background: #f0f0f0; }
 
 #bookmarkBar {
   width: 120px; overflow-y: auto; background: #252526; border-right: 1px solid #333;
@@ -127,63 +108,56 @@ h1 { font-size: 20px; margin-bottom: 20px; }
   background: none; border: none; color: #666; cursor: pointer; font-size: 12px;
   margin-left: 4px; padding: 0; line-height: 1; flex-shrink: 0;
 }
-.bookmark-tag .bookmark-del:hover { color: #d32f2f; }
+.bookmark-tag .bookmark-del:hover { color: var(--color-danger); }
 .log-viewer-body { display: flex; }
 .log-viewer-body #logViewport { flex: 1; min-width: 0; }
 
 .filter-actions { display: inline-flex; gap: 4px; margin-left: 4px; }
 .filter-dropdown {
-  position: absolute; background: #fff; border: 1px solid #ccc; border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.15); max-height: 200px; overflow-y: auto;
-  z-index: 100; min-width: 200px; font-size: 13px;
+  position: absolute; background: var(--color-surface); border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-lg);
+  max-height: 200px; overflow-y: auto; z-index: 100; min-width: 200px; font-size: 13px;
 }
 .filter-dropdown-item {
   padding: 6px 28px 6px 10px; cursor: pointer; position: relative;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: background var(--transition);
 }
-.filter-dropdown-item:hover { background: #f0f0f0; }
+.filter-dropdown-item:hover { background: var(--color-bg); }
 .filter-dropdown-item .del-btn {
   position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
-  background: none; border: none; cursor: pointer; color: #999; font-size: 14px; line-height: 1;
+  background: none; border: none; cursor: pointer; color: var(--color-text-secondary); font-size: 14px; line-height: 1;
 }
-.filter-dropdown-item .del-btn:hover { color: #d32f2f; }
-.filter-dropdown-empty { padding: 8px 10px; color: #999; font-style: italic; }
+.filter-dropdown-item .del-btn:hover { color: var(--color-danger); }
+.filter-dropdown-empty { padding: 8px 10px; color: var(--color-text-secondary); font-style: italic; }
 
 #downloadSection {
-  display: none; background: #fff; border-radius: 8px; margin-top: 16px;
-  border: 1px solid #e0e0e0;
+  display: none; background: var(--color-surface); border-radius: var(--radius-md);
+  margin-top: 16px; box-shadow: var(--shadow-sm); border: none;
 }
 .download-header {
-  padding: 12px 16px; border-bottom: 1px solid #e0e0e0;
+  padding: 12px 16px; border-bottom: 1px solid var(--color-border);
   font-size: 14px; font-weight: 500;
   display: flex; justify-content: space-between; align-items: center; gap: 12px;
 }
-.download-header input {
-  font-size: 13px; padding: 4px 8px; border: 1px solid #ccc; border-radius: 4px; width: 240px;
-}
-.download-count { font-size: 12px; color: #999; flex-shrink: 0; }
+.download-header input { font-size: 13px; padding: 4px 8px; width: 240px; }
+.download-count { font-size: 12px; color: var(--color-text-secondary); flex-shrink: 0; }
 .download-list { max-height: 400px; overflow-y: auto; }
 .download-item {
   padding: 8px 16px; display: flex; justify-content: space-between; align-items: center;
-  font-size: 13px; border-bottom: 1px solid #f0f0f0;
+  font-size: 13px; border-bottom: 1px solid var(--color-border);
 }
 .download-item:last-child { border-bottom: none; }
-.download-item:hover { background: #fafafa; }
+.download-item:hover { background: var(--color-bg); }
 .download-item-name {
   flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .download-item .file-size { flex-shrink: 0; }
-.download-btn {
-  background: none; border: 1px solid #ccc; border-radius: 4px;
-  padding: 2px 8px; cursor: pointer; font-size: 12px; color: #666;
-  flex-shrink: 0; margin-left: 8px;
-}
-.download-btn:hover { background: #f0f0f0; }
 </style>
 </head>
 <body>
 <div class="container">
-  <div style="font-size:13px;margin-bottom:16px;color:#888">Log Parser / <a href="stack-analyzer.html" style="color:#1a73e8;text-decoration:none">Stack Analyzer</a> / <a href="file-browser.html" style="color:#1a73e8;text-decoration:none">File Browser</a></div>
+  <div class="nav">Log Parser / <a href="stack-analyzer.html">Stack Analyzer</a> / <a href="file-browser.html">File Browser</a></div>
   <h1>Log Parser</h1>
 
   <div class="upload-area" id="uploadArea">
@@ -216,12 +190,12 @@ h1 { font-size: 20px; margin-bottom: 20px; }
     <label>Date To <input type="date" id="filterDateTo"></label>
     <label>Time From <input type="time" id="filterTimeFrom"></label>
     <label>Time To <input type="time" id="filterTimeTo"></label>
-    <label>Filename <input type="text" id="filenameInput" placeholder="e.g. utas AND (run OR alarm)"><span class="filter-actions"><button class="maximize-btn" onclick="saveFilterPrompt('filename')">Save</button><button class="maximize-btn" onclick="showFilterDropdown('filename',this,document.getElementById('filenameInput'))">Load</button></span></label>
-    <label>Keyword <input type="text" id="keywordInput" placeholder="e.g. &quot;connection timeout&quot; AND error"><span class="filter-actions"><button class="maximize-btn" onclick="saveFilterPrompt('keyword')">Save</button><button class="maximize-btn" onclick="showFilterDropdown('keyword',this,document.getElementById('keywordInput'))">Load</button></span></label>
+    <label>Filename <input type="text" id="filenameInput" placeholder="e.g. utas AND (run OR alarm)"><span class="filter-actions"><button class="btn" onclick="saveFilterPrompt('filename')">Save</button><button class="btn" onclick="showFilterDropdown('filename',this,document.getElementById('filenameInput'))">Load</button></span></label>
+    <label>Keyword <input type="text" id="keywordInput" placeholder="e.g. &quot;connection timeout&quot; AND error"><span class="filter-actions"><button class="btn" onclick="saveFilterPrompt('keyword')">Save</button><button class="btn" onclick="showFilterDropdown('keyword',this,document.getElementById('keywordInput'))">Load</button></span></label>
     <label>Before <input type="number" id="contextBefore" value="0" min="0" max="500" style="width:60px"></label>
     <label>After <input type="number" id="contextAfter" value="0" min="0" max="500" style="width:60px"></label>
     <span class="filter-count" id="filterCount"></span>
-    <span style="display:inline-flex;gap:4px;margin-left:8px"><button class="maximize-btn" onclick="exportConfig()">Export</button><button class="maximize-btn" onclick="document.getElementById('importConfigInput').click()">Import</button><input type="file" id="importConfigInput" accept=".json" style="display:none" onchange="importConfig(this.files[0]);this.value=''"></span>
+    <span style="display:inline-flex;gap:4px;margin-left:8px"><button class="btn" onclick="exportConfig()">Export</button><button class="btn" onclick="document.getElementById('importConfigInput').click()">Import</button><input type="file" id="importConfigInput" accept=".json" style="display:none" onchange="importConfig(this.files[0]);this.value=''"></span>
   </div>
 
   <div id="logViewerSection">
@@ -229,7 +203,7 @@ h1 { font-size: 20px; margin-bottom: 20px; }
       <span>Log Viewer</span>
       <span style="display:flex;align-items:center;gap:8px">
         <span id="logViewerStats" style="font-size:12px;color:#999"></span>
-        <button class="maximize-btn" id="maximizeBtn">Maximize</button>
+        <button class="btn" id="maximizeBtn">Maximize</button>
       </span>
     </div>
     <div class="log-viewer-body">
@@ -955,7 +929,7 @@ h1 { font-size: 20px; margin-bottom: 20px; }
         sizeSpan.className = 'file-size';
         sizeSpan.textContent = formatSize(file.size);
         var btn = document.createElement('button');
-        btn.className = 'download-btn';
+        btn.className = 'btn';
         btn.textContent = 'Download';
         btn.addEventListener('click', function() { downloadFile(file); });
         item.appendChild(nameSpan);

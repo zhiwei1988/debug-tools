@@ -4,43 +4,22 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Stack Analyzer</title>
+<link rel="stylesheet" href="common.css">
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f5f5f5; padding: 24px; color: #333; }
-.container { max-width: 900px; margin: 0 auto; }
-.nav { font-size: 13px; margin-bottom: 16px; color: #888; }
-.nav a { color: #555; text-decoration: none; }
-.nav a:hover { text-decoration: underline; }
-h1 { font-size: 20px; margin-bottom: 20px; }
-
-.form-section { background: #fff; border-radius: 8px; padding: 24px; margin-bottom: 16px; }
-.form-row { margin-bottom: 16px; }
-label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #555; }
-select, textarea {
-  width: 100%; padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px;
-  font-size: 14px; font-family: inherit; background: #fafafa;
+select { width: 100%; height: 36px; }
+textarea {
+  width: 100%; height: 200px; resize: vertical;
+  font-family: "Courier New", monospace; font-size: 13px;
 }
-select { height: 36px; }
-textarea { height: 200px; resize: vertical; font-family: "Courier New", monospace; font-size: 13px; }
-select.error, textarea.error { border-color: #e53935; }
-
-.file-row { display: flex; align-items: center; gap: 10px; }
-.file-btn {
-  padding: 7px 14px; background: #f0f0f0; border: 1px solid #ccc; border-radius: 6px;
-  cursor: pointer; font-size: 13px; white-space: nowrap;
-}
-.file-btn:hover { background: #e4e4e4; }
-.file-name { font-size: 13px; color: #666; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-name.error { color: #e53935; }
-input[type=file] { display: none; }
 
 .analyze-btn {
   display: flex; align-items: center; gap: 8px;
-  padding: 10px 24px; background: #1a73e8; color: #fff; border: none;
-  border-radius: 6px; font-size: 14px; cursor: pointer; font-weight: 600;
+  padding: 10px 24px; background: var(--color-primary); color: #fff; border: none;
+  border-radius: var(--radius-sm); font-size: 14px; cursor: pointer; font-weight: 600;
+  box-shadow: var(--shadow-sm); transition: all var(--transition);
 }
-.analyze-btn:hover:not(:disabled) { background: #1558b0; }
-.analyze-btn:disabled { background: #9dbde8; cursor: not-allowed; }
+.analyze-btn:hover:not(:disabled) { background: #0063d1; box-shadow: var(--shadow-md); }
+.analyze-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .spinner {
   width: 16px; height: 16px; border: 2px solid rgba(255,255,255,0.4);
@@ -49,20 +28,18 @@ input[type=file] { display: none; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.error-msg { color: #e53935; font-size: 13px; margin-top: 12px; display: none; }
-
-.results-section { background: #fff; border-radius: 8px; padding: 24px; display: none; }
+.results-section { display: none; }
 .results-section h2 { font-size: 15px; margin-bottom: 14px; }
 .frame {
   display: grid; grid-template-columns: 36px 1fr;
-  border-bottom: 1px solid #f0f0f0; padding: 8px 0; gap: 0 12px;
+  border-bottom: 1px solid var(--color-border); padding: 8px 0; gap: 0 12px;
 }
 .frame:last-child { border-bottom: none; }
-.frame-idx { font-size: 12px; color: #aaa; line-height: 1.6; text-align: right; }
+.frame-idx { font-size: 12px; color: var(--color-text-secondary); line-height: 1.6; text-align: right; }
 .frame-body { min-width: 0; }
-.frame-fn { font-family: "Courier New", monospace; font-size: 13px; color: #1a73e8; word-break: break-all; }
+.frame-fn { font-family: "Courier New", monospace; font-size: 13px; color: var(--color-primary); word-break: break-all; }
 .frame-fn.unresolved { color: #aaa; }
-.frame-loc { font-size: 12px; color: #888; margin-top: 2px; word-break: break-all; }
+.frame-loc { font-size: 12px; color: var(--color-text-secondary); margin-top: 2px; word-break: break-all; }
 .frame-orig { font-size: 11px; color: #bbb; margin-top: 2px; font-family: monospace; }
 .unresolved-badge {
   display: inline-block; font-size: 10px; background: #fff3e0; color: #e65100;
@@ -75,13 +52,13 @@ input[type=file] { display: none; }
   <div class="nav"><a href="index.html">Log Parser</a> / Stack Analyzer / <a href="file-browser.html">File Browser</a></div>
   <h1>Stack Analyzer</h1>
 
-  <div class="form-section">
+  <div class="card">
     <div class="form-row">
       <label for="serverUrl">Server URL</label>
       <div class="file-row">
-        <input type="text" id="serverUrl" style="flex:1;padding:7px 10px;border:1px solid #ccc;border-radius:6px;font-size:14px" placeholder="http://192.168.1.100:3000">
-        <button class="file-btn" id="connectBtn">Connect</button>
-        <button class="file-btn" id="detectBtn">Detect Toolchains</button>
+        <input type="text" id="serverUrl" style="flex:1" placeholder="http://192.168.1.100:3000">
+        <button class="btn" id="connectBtn">Connect</button>
+        <button class="btn" id="detectBtn">Detect Toolchains</button>
         <span id="detectMsg" style="font-size:13px;color:#555"></span>
       </div>
     </div>
@@ -101,7 +78,7 @@ input[type=file] { display: none; }
     <div class="form-row">
       <label>ELF Binaries (with debug symbols)</label>
       <div class="file-row">
-        <label class="file-btn" for="elfInput">Choose Files</label>
+        <label class="btn" for="elfInput">Choose Files</label>
         <input type="file" id="elfInput" accept="*" multiple>
         <span class="file-name" id="fileName">No file chosen</span>
       </div>
@@ -114,10 +91,10 @@ input[type=file] { display: none; }
     <div class="error-msg" id="errorMsg"></div>
   </div>
 
-  <div class="results-section" id="results">
+  <div class="card results-section" id="results">
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
       <h2 style="margin-bottom:0">Resolved Stack Trace</h2>
-      <button class="file-btn" id="exportBtn">Export</button>
+      <button class="btn" id="exportBtn">Export</button>
     </div>
     <div id="frames"></div>
   </div>

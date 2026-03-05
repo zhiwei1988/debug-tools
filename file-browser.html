@@ -4,48 +4,24 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>File Browser</title>
+<link rel="stylesheet" href="common.css">
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, "Segoe UI", sans-serif; background: #f5f5f5; padding: 24px; color: #333; }
-.container { max-width: 900px; margin: 0 auto; }
-.nav { font-size: 13px; margin-bottom: 16px; color: #888; }
-.nav a { color: #555; text-decoration: none; }
-.nav a:hover { text-decoration: underline; }
-h1 { font-size: 20px; margin-bottom: 20px; }
-
-.form-section { background: #fff; border-radius: 8px; padding: 24px; margin-bottom: 16px; }
-.form-row { margin-bottom: 16px; }
-label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #555; }
-.file-row { display: flex; align-items: center; gap: 10px; }
-.file-btn {
-  padding: 7px 14px; background: #f0f0f0; border: 1px solid #ccc; border-radius: 6px;
-  cursor: pointer; font-size: 13px; white-space: nowrap;
-  display: inline-block; line-height: 1.2; vertical-align: middle;
-}
-.file-btn:hover { background: #e4e4e4; }
-.file-btn.danger { color: #e53935; }
-.file-btn.danger:hover { background: #fce4ec; }
-
-.root-info { font-size: 13px; color: #888; margin-bottom: 16px; display: none; }
-.breadcrumb { font-size: 13px; margin-bottom: 12px; color: #888; }
-.breadcrumb a { color: #1a73e8; text-decoration: none; cursor: pointer; }
+.root-info { font-size: 13px; color: var(--color-text-secondary); margin-bottom: 16px; display: none; }
+.breadcrumb { font-size: 13px; margin-bottom: 12px; color: var(--color-text-secondary); }
+.breadcrumb a { color: var(--color-primary); text-decoration: none; cursor: pointer; }
 .breadcrumb a:hover { text-decoration: underline; }
 .toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
 
 .file-table { width: 100%; border-collapse: collapse; }
-.file-table th { text-align: left; font-size: 12px; color: #888; font-weight: 600; padding: 6px 8px; border-bottom: 2px solid #eee; }
-.file-table td { padding: 7px 8px; border-bottom: 1px solid #f0f0f0; font-size: 13px; }
-.file-table tr:hover { background: #fafafa; }
-.file-table .name-cell a { color: #1a73e8; text-decoration: none; cursor: pointer; }
+.file-table th { text-align: left; font-size: 12px; color: var(--color-text-secondary); font-weight: 600; padding: 6px 8px; border-bottom: 2px solid var(--color-border); }
+.file-table td { padding: 7px 8px; border-bottom: 1px solid var(--color-border); font-size: 13px; }
+.file-table tr:hover { background: var(--color-bg); }
+.file-table .name-cell a { color: var(--color-primary); text-decoration: none; cursor: pointer; }
 .file-table .name-cell a:hover { text-decoration: underline; }
 .file-table .icon { display: inline-block; width: 20px; text-align: center; margin-right: 4px; }
-.file-table .size-cell, .file-table .time-cell { color: #888; white-space: nowrap; }
+.file-table .size-cell, .file-table .time-cell { color: var(--color-text-secondary); white-space: nowrap; }
 .file-table .action-cell { white-space: nowrap; }
 .file-table .action-cell button { margin-left: 4px; }
-
-.error-msg { color: #e53935; font-size: 13px; margin-top: 12px; display: none; }
-.content-section { background: #fff; border-radius: 8px; padding: 24px; display: none; }
-input[type=file] { display: none; }
 </style>
 </head>
 <body>
@@ -53,12 +29,12 @@ input[type=file] { display: none; }
   <div class="nav"><a href="index.html">Log Parser</a> / <a href="stack-analyzer.html">Stack Analyzer</a> / File Browser</div>
   <h1>File Browser</h1>
 
-  <div class="form-section">
+  <div class="card">
     <div class="form-row">
       <label for="serverUrl">Server URL</label>
       <div class="file-row">
-        <input type="text" id="serverUrl" style="flex:1;padding:7px 10px;border:1px solid #ccc;border-radius:6px;font-size:14px" placeholder="http://192.168.1.100:3000">
-        <button class="file-btn" id="connectBtn">Connect</button>
+        <input type="text" id="serverUrl" style="flex:1" placeholder="http://192.168.1.100:3000">
+        <button class="btn" id="connectBtn">Connect</button>
       </div>
     </div>
     <div class="error-msg" id="errorMsg"></div>
@@ -66,12 +42,12 @@ input[type=file] { display: none; }
 
   <div class="root-info" id="rootInfo"></div>
 
-  <div class="content-section" id="content">
+  <div class="card" id="content" style="display:none">
     <div class="breadcrumb" id="breadcrumb"></div>
     <div class="toolbar">
-      <label class="file-btn" for="uploadInput">Upload</label>
+      <label class="btn" for="uploadInput">Upload</label>
       <input type="file" id="uploadInput" multiple>
-      <button class="file-btn" id="mkdirBtn">New Folder</button>
+      <button class="btn" id="mkdirBtn">New Folder</button>
     </div>
     <table class="file-table">
       <thead><tr><th>Name</th><th style="width:90px">Size</th><th style="width:150px">Modified</th><th style="width:120px">Action</th></tr></thead>
@@ -172,9 +148,9 @@ function renderTable(entries, rel) {
     html += '<td class="time-cell">' + formatTime(e.mtime) + '</td>';
     html += '<td class="action-cell">';
     if (e.type === 'file') {
-      html += '<button class="file-btn" onclick="download(\'' + escapedPath + '\')">Download</button>';
+      html += '<button class="btn" onclick="download(\'' + escapedPath + '\')">Download</button>';
     }
-    html += '<button class="file-btn danger" onclick="remove(\'' + escapedPath + '\')">Delete</button>';
+    html += '<button class="btn btn-danger" onclick="remove(\'' + escapedPath + '\')">Delete</button>';
     html += '</td></tr>';
   }
   if (entries.length === 0 && rel === '.') {
