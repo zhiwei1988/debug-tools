@@ -149,6 +149,8 @@ function renderTable(entries, rel) {
     html += '<td class="action-cell">';
     if (e.type === 'file') {
       html += '<button class="btn" onclick="download(\'' + escapedPath + '\')">Download</button>';
+    } else if (e.type === 'dir') {
+      html += '<button class="btn" onclick="downloadFolder(\'' + escapedPath + '\')">Download</button>';
     }
     html += '<button class="btn btn-danger" onclick="remove(\'' + escapedPath + '\')">Delete</button>';
     html += '</td></tr>';
@@ -161,6 +163,10 @@ function renderTable(entries, rel) {
 
 function download(rel) {
   window.open(`${serverUrl()}/api/files/download?path=${encodeURIComponent(rel)}`, '_blank');
+}
+
+function downloadFolder(rel) {
+  window.open(`${serverUrl()}/api/files/download-folder?path=${encodeURIComponent(rel)}`, '_blank');
 }
 
 uploadInput.addEventListener('change', async () => {

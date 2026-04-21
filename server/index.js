@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
+const archiver = require('archiver');
 const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -472,6 +473,43 @@ app.get('/api/files/download', (req, res) => {
   } catch (e) {
     res.status(404).json({ error: e.message });
   }
+});
+
+app.get('/api/files/download-folder', (req, res) => {
+  const abs = safePath(req.query.path);
+  if (!abs) return res.status(403).json({ error: 'Access denied' });
+  if (abs === FILE_ROOT) return res.status(400).json({ error: 'Cannot download root' });
+
+  let stat;
+  try {
+    stat = fs.statSync(abs);
+  } catch (e) {
+    return res.status(404).json({ error: e.message });
+  }
+  if (!stat.isDirectory()) return res.status(400).json({ error: 'Not a directory' });
+
+  const dirName = path.basename(abs);
+  const zipName = dirName + '.zip';
+  // RFC 5987: ASCII fallback + UTF-8 encoded form, handles non-ASCII / spaces
+  const asciiFallback = zipName.replace(/[^\x20-\x7e]/g, '_').replace(/"/g, '');
+  const encoded = encodeURIComponent(zipName);
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition',
+    `attachment; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`);
+
+  const archive = archiver('zip', { store: true });
+
+  archive.on('warning', (err) => {
+    // Non-fatal (e.g. ENOENT on a file that disappeared mid-scan) — skip it
+    if (err.code !== 'ENOENT') res.destroy(err);
+  });
+  archive.on('error', (err) => { res.destroy(err); });
+  // Client aborted / socket closed while streaming — stop reading fds
+  res.on('close', () => { if (!res.writableEnded) archive.abort(); });
+
+  archive.pipe(res);
+  archive.directory(abs, dirName);
+  archive.finalize();
 });
 
 app.post('/api/files/upload', fileUpload.array('files'), (req, res) => {
