@@ -2,10 +2,12 @@ const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const archiver = require('archiver');
+const { WebSocketServer } = require('ws');
 const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -429,8 +431,6 @@ app.post('/api/analyze', upload.array('elf'), async (req, res) => {
 
 // --- File Browser API ---
 
-const fileUpload = multer({ dest: os.tmpdir(), limits: { fileSize: 500 * 1024 * 1024 } });
-
 app.get('/api/files/root', (req, res) => {
   res.json({ root: FILE_ROOT });
 });
@@ -512,23 +512,6 @@ app.get('/api/files/download-folder', (req, res) => {
   archive.finalize();
 });
 
-app.post('/api/files/upload', fileUpload.array('files'), (req, res) => {
-  const destDir = safePath(req.body.path);
-  if (!destDir) return res.status(403).json({ error: 'Access denied' });
-
-  try {
-    if (!fs.statSync(destDir).isDirectory()) return res.status(400).json({ error: 'Not a directory' });
-  } catch { return res.status(400).json({ error: 'Target directory does not exist' }); }
-
-  const uploaded = [];
-  for (const f of (req.files || [])) {
-    const target = path.join(destDir, f.originalname);
-    fs.renameSync(f.path, target);
-    uploaded.push(f.originalname);
-  }
-  res.json({ uploaded });
-});
-
 app.post('/api/files/mkdir', express.json(), (req, res) => {
   const body = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
   const abs = safePath(body.path);
@@ -561,6 +544,177 @@ app.delete('/api/files/delete', express.json(), (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+// --- WebSocket Upload (/ws) ---
+
+const TMP_SUFFIX_RE = /\.uploading\.[a-f0-9]{6}$/;
+const IDLE_TIMEOUT_MS = 30 * 1000;
+const ACK_BYTES = 1024 * 1024;
+const ACK_INTERVAL_MS = 200;
+const BACKPRESSURE_BYTES = 8 * 1024 * 1024;
+
+// Sweep stranded tmp files left by prior runs (server crash / WS drop mid-transfer)
+function cleanupOrphans(dir) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      cleanupOrphans(full);
+    } else if (TMP_SUFFIX_RE.test(entry.name)) {
+      try { fs.unlinkSync(full); } catch {}
+    }
+  }
+}
+
+function attachUploadWS(httpServer) {
+  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
+
+  wss.on('connection', (ws) => {
+    let sess = null;
+
+    const sendJson = (obj) => {
+      if (ws.readyState === ws.OPEN) {
+        try { ws.send(JSON.stringify(obj)); } catch {}
+      }
+    };
+    const sendError = (msg) => sendJson({ type: 'error', msg });
+
+    const clearTimers = (s) => {
+      if (!s) return;
+      clearTimeout(s.idleTimer); s.idleTimer = null;
+      clearTimeout(s.ackTimer);  s.ackTimer = null;
+    };
+
+    const closeTmp = (s) => {
+      if (!s) return;
+      if (s.stream) { try { s.stream.destroy(); } catch {} }
+      if (s.tmp) fs.unlink(s.tmp, () => {});
+    };
+
+    const cleanupSession = () => {
+      if (!sess) return;
+      clearTimers(sess);
+      closeTmp(sess);
+      sess = null;
+    };
+
+    const sendAck = () => {
+      if (!sess) return;
+      sendJson({ type: 'ack', received: sess.received });
+      sess.ackBytes = 0;
+      sess.lastAck = Date.now();
+      clearTimeout(sess.ackTimer);
+      sess.ackTimer = null;
+    };
+
+    const scheduleAck = () => {
+      if (!sess) return;
+      if (sess.ackBytes >= ACK_BYTES) {
+        sendAck();
+      } else if (!sess.ackTimer) {
+        sess.ackTimer = setTimeout(sendAck, ACK_INTERVAL_MS);
+      }
+    };
+
+    const armIdle = () => {
+      if (!sess) return;
+      clearTimeout(sess.idleTimer);
+      sess.idleTimer = setTimeout(() => {
+        sendError('timeout');
+        cleanupSession();
+        try { ws.close(); } catch {}
+      }, IDLE_TIMEOUT_MS);
+    };
+
+    const handleInit = (msg) => {
+      if (sess) {
+        sendError('protocol error: concurrent init');
+        cleanupSession();
+        return;
+      }
+      const size = Number(msg.size);
+      if (!Number.isFinite(size) || size < 0) { sendError('missing or invalid size'); return; }
+      const relPath = typeof msg.relPath === 'string' && msg.relPath ? msg.relPath : null;
+      if (!relPath) { sendError('missing relPath'); return; }
+      const joined = path.join(msg.path || '.', relPath);
+      const abs = safePath(joined);
+      if (!abs) { sendError('access denied'); return; }
+      try { fs.mkdirSync(path.dirname(abs), { recursive: true }); }
+      catch (e) { sendError('mkdir failed: ' + e.message); return; }
+      const tmp = abs + '.uploading.' + crypto.randomBytes(3).toString('hex');
+      let stream;
+      try { stream = fs.createWriteStream(tmp); }
+      catch (e) { sendError('open tmp failed: ' + e.message); return; }
+      sess = {
+        target: abs,
+        targetRel: joined,
+        tmp,
+        size,
+        received: 0,
+        stream,
+        ackBytes: 0,
+        lastAck: Date.now(),
+        ackTimer: null,
+        idleTimer: null,
+      };
+      stream.on('error', (e) => { sendError('write error: ' + e.message); cleanupSession(); });
+      sendJson({ type: 'ready' });
+      armIdle();
+    };
+
+    const handleFinish = () => {
+      if (!sess) { sendError('no active upload'); return; }
+      const s = sess;
+      sess = null;                // block further binary/init from landing on s
+      clearTimers(s);
+      s.stream.end(() => {
+        if (s.received !== s.size) {
+          sendError('size mismatch');
+          fs.unlink(s.tmp, () => {});
+          return;
+        }
+        try { fs.renameSync(s.tmp, s.target); }
+        catch (e) { sendError('rename failed: ' + e.message); fs.unlink(s.tmp, () => {}); return; }
+        sendJson({ type: 'ack', received: s.received });
+        sendJson({ type: 'done', path: path.relative(FILE_ROOT, s.target).split(path.sep).join('/') });
+      });
+    };
+
+    const handleBinary = (data) => {
+      if (!sess || !sess.stream) { sendError('unexpected binary frame'); return; }
+      const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      if (sess.received + buf.length > sess.size) {
+        sendError('oversize');
+        cleanupSession();
+        return;
+      }
+      ws.pause();
+      sess.received += buf.length;
+      sess.ackBytes += buf.length;
+      sess.stream.write(buf, () => { ws.resume(); });
+      armIdle();
+      scheduleAck();
+    };
+
+    ws.on('message', (data, isBinary) => {
+      if (isBinary) return handleBinary(data);
+      let msg;
+      try { msg = JSON.parse(data.toString('utf8')); }
+      catch { sendError('invalid json'); return; }
+      if (msg.type === 'init')        handleInit(msg);
+      else if (msg.type === 'finish') handleFinish();
+      else if (msg.type === 'abort')  cleanupSession();
+      else                            sendError('unknown message type: ' + msg.type);
+    });
+
+    ws.on('close', cleanupSession);
+    ws.on('error', cleanupSession);
+  });
+}
+
+cleanupOrphans(FILE_ROOT);
+
+const httpServer = app.listen(PORT, () => {
   console.log(`Stack analyzer server listening on port ${PORT}`);
 });
+attachUploadWS(httpServer);

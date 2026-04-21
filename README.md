@@ -108,13 +108,28 @@ Stack Analyzer 可选的 `addr2line` 白名单，key 会显示在前端 Toolchai
 | GET  | `/api/files/root` | 返回 `fileRoot` 绝对路径 |
 | GET  | `/api/files/list?path=` | 列目录 |
 | GET  | `/api/files/download?path=` | 下载文件 |
-| POST | `/api/files/upload` | `multipart/form-data`：`path`、`files`（可多个） |
+| GET  | `/api/files/download-folder?path=` | 以 zip 流式下载整个文件夹 |
 | POST | `/api/files/mkdir` | JSON：`{ "path": "..." }` |
 | DELETE | `/api/files/delete` | JSON：`{ "path": "..." }` |
+| WS   | `/ws` | File Browser 上传通道（流式，详见下） |
 
-上传限制：Stack Analyzer ELF ≤ 100MB；File Browser 单文件 ≤ 500MB。
+上传限制：Stack Analyzer ELF ≤ 100MB；File Browser 受磁盘空间限制（WS 流式，无固定上限）。
+
+### `/ws` 上传协议（串行）
+
+客户端按需建连，每次上传一个文件：
+
+1. `→ {type:"init", path, relPath, size}` 声明目标与大小
+2. `← {type:"ready"}` 服务端已开好 `<target>.uploading.<rand6>` tmp 文件
+3. `→` 若干二进制帧（纯字节）
+4. `← {type:"ack", received}` 周期性（每 1 MB 或 200 ms）
+5. `→ {type:"finish"}` 发完所有字节
+6. `← {type:"done", path}` 服务端校验 size 后原子 rename 到目标
+7. 单条 WS 可串行复用传下一个文件；空闲 30 s 由客户端关闭
+
+失败时服务端发 `{type:"error", msg}` 并清理 tmp；客户端可发 `{type:"abort"}` 主动取消。服务端启动时会扫 `fileRoot` 清掉遗留的 `*.uploading.*` 孤儿文件。
 
 ## 依赖
 
 - **前端**：浏览器，`pako` 与 `fflate`（通过 CDN `jsdelivr.net` 加载，离线环境需自行替换）。
-- **后端**：Node.js ≥ 16，`express`、`cors`、`multer`，以及所需的 `*-addr2line` 可执行文件（如 `arm-none-eabi`、`xtensa-esp32-elf`）。
+- **后端**：Node.js ≥ 16，`express`、`cors`、`multer`、`archiver`、`ws`，以及所需的 `*-addr2line` 可执行文件（如 `arm-none-eabi`、`xtensa-esp32-elf`）。

@@ -22,6 +22,11 @@
 .file-table .size-cell, .file-table .time-cell { color: var(--color-text-secondary); white-space: nowrap; }
 .file-table .action-cell { white-space: nowrap; }
 .file-table .action-cell button { margin-left: 4px; }
+
+.upload-progress { margin: 8px 0; font-size: 13px; color: var(--color-text-secondary); display: none; }
+.upload-progress .name { font-family: var(--font-mono, monospace); }
+.upload-progress .bar { display: inline-block; vertical-align: middle; width: 180px; height: 6px; background: var(--color-border); border-radius: 3px; overflow: hidden; margin: 0 8px; }
+.upload-progress .bar > span { display: block; height: 100%; background: var(--color-primary); width: 0; transition: width 120ms linear; }
 </style>
 </head>
 <body>
@@ -45,9 +50,16 @@
   <div class="card" id="content" style="display:none">
     <div class="breadcrumb" id="breadcrumb"></div>
     <div class="toolbar">
-      <label class="btn" for="uploadInput">Upload</label>
-      <input type="file" id="uploadInput" multiple>
+      <label class="btn" for="uploadInput">Upload Files</label>
+      <input type="file" id="uploadInput" multiple style="display:none">
+      <label class="btn" for="uploadFolderInput">Upload Folder</label>
+      <input type="file" id="uploadFolderInput" webkitdirectory directory multiple style="display:none">
       <button class="btn" id="mkdirBtn">New Folder</button>
+    </div>
+    <div class="upload-progress" id="uploadProgress">
+      <span class="name" id="uploadProgressName"></span>
+      <span class="bar"><span id="uploadProgressBar"></span></span>
+      <span id="uploadProgressText"></span>
     </div>
     <table class="file-table">
       <thead><tr><th>Name</th><th style="width:90px">Size</th><th style="width:150px">Modified</th><th style="width:120px">Action</th></tr></thead>
@@ -66,7 +78,12 @@ const contentEl = document.getElementById('content');
 const breadcrumbEl = document.getElementById('breadcrumb');
 const fileListEl = document.getElementById('fileList');
 const uploadInput = document.getElementById('uploadInput');
+const uploadFolderInput = document.getElementById('uploadFolderInput');
 const mkdirBtn = document.getElementById('mkdirBtn');
+const uploadProgressEl = document.getElementById('uploadProgress');
+const uploadProgressNameEl = document.getElementById('uploadProgressName');
+const uploadProgressBarEl = document.getElementById('uploadProgressBar');
+const uploadProgressTextEl = document.getElementById('uploadProgressText');
 
 let currentPath = '.';
 
@@ -169,19 +186,158 @@ function downloadFolder(rel) {
   window.open(`${serverUrl()}/api/files/download-folder?path=${encodeURIComponent(rel)}`, '_blank');
 }
 
-uploadInput.addEventListener('change', async () => {
-  if (uploadInput.files.length === 0) return;
-  const form = new FormData();
-  form.append('path', currentPath);
-  for (const f of uploadInput.files) form.append('files', f);
+const UPLOAD_WS_IDLE_MS = 30 * 1000;
+const UPLOAD_BACKPRESSURE = 8 * 1024 * 1024;
+let uploadWS = null;
+let uploadWSIdleTimer = null;
+
+function wsUrl() {
+  const u = serverUrl();
+  return u.replace(/^http/i, (m) => m.toLowerCase() === 'https' ? 'wss' : 'ws') + '/ws';
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function clearUploadIdleTimer() {
+  clearTimeout(uploadWSIdleTimer);
+  uploadWSIdleTimer = null;
+}
+
+function armUploadIdleClose() {
+  clearUploadIdleTimer();
+  uploadWSIdleTimer = setTimeout(() => {
+    if (uploadWS && uploadWS.readyState === WebSocket.OPEN) uploadWS.close();
+  }, UPLOAD_WS_IDLE_MS);
+}
+
+function ensureUploadWS() {
+  if (uploadWS && uploadWS.readyState === WebSocket.OPEN) {
+    clearUploadIdleTimer();
+    return Promise.resolve(uploadWS);
+  }
+  return new Promise((resolve, reject) => {
+    let ws;
+    try { ws = new WebSocket(wsUrl()); } catch (e) { reject(e); return; }
+    ws.binaryType = 'arraybuffer';
+    const onOpen = () => { ws.removeEventListener('error', onErr); uploadWS = ws; resolve(ws); };
+    const onErr = () => { ws.removeEventListener('open', onOpen); reject(new Error('WebSocket connect failed')); };
+    ws.addEventListener('open', onOpen, { once: true });
+    ws.addEventListener('error', onErr, { once: true });
+    ws.addEventListener('close', () => {
+      if (uploadWS === ws) uploadWS = null;
+      clearUploadIdleTimer();
+    });
+  });
+}
+
+// Wait for a control message whose type is in `expected`; forward ack frames via onAck.
+function waitForMsg(ws, expected, onAck) {
+  return new Promise((resolve, reject) => {
+    function cleanup() {
+      ws.removeEventListener('message', onMsg);
+      ws.removeEventListener('close', onClose);
+      ws.removeEventListener('error', onErr);
+    }
+    function onMsg(ev) {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch { return; }
+      if (msg.type === 'ack') { onAck && onAck(msg); return; }
+      if (msg.type === 'error') { cleanup(); reject(new Error(msg.msg || 'server error')); return; }
+      if (expected.has(msg.type)) { cleanup(); resolve(msg); }
+    }
+    function onClose() { cleanup(); reject(new Error('WebSocket closed')); }
+    function onErr() { cleanup(); reject(new Error('WebSocket error')); }
+    ws.addEventListener('message', onMsg);
+    ws.addEventListener('close', onClose);
+    ws.addEventListener('error', onErr);
+  });
+}
+
+function showUploadProgress(name, received, total) {
+  uploadProgressEl.style.display = 'block';
+  uploadProgressNameEl.textContent = name;
+  const pct = total > 0 ? Math.min(100, Math.round(received / total * 100)) : 0;
+  uploadProgressBarEl.style.width = pct + '%';
+  uploadProgressTextEl.textContent = pct + '%  ' + formatSize(received) + ' / ' + formatSize(total);
+}
+
+function clearUploadProgress() {
+  uploadProgressEl.style.display = 'none';
+  uploadProgressNameEl.textContent = '';
+  uploadProgressBarEl.style.width = '0';
+  uploadProgressTextEl.textContent = '';
+}
+
+async function uploadOneFile(ws, file) {
+  const relPath = file.webkitRelativePath || file.name;
+  const name = relPath;
+  showUploadProgress(name, 0, file.size);
+
+  ws.send(JSON.stringify({ type: 'init', path: currentPath, relPath, size: file.size }));
+  await waitForMsg(ws, new Set(['ready']), null);
+
+  let serverErr = null;
+  const donePromise = waitForMsg(ws, new Set(['done']), (ack) => {
+    showUploadProgress(name, ack.received, file.size);
+  });
+  donePromise.catch(e => { serverErr = e; });
+
+  const reader = file.stream().getReader();
   try {
-    const res = await fetch(`${serverUrl()}/api/files/upload`, { method: 'POST', body: form });
-    if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Upload failed'); }
+    while (true) {
+      if (serverErr) throw serverErr;
+      const { done, value } = await reader.read();
+      if (done) break;
+      while (ws.bufferedAmount > UPLOAD_BACKPRESSURE) {
+        if (ws.readyState !== WebSocket.OPEN || serverErr) break;
+        await sleep(10);
+      }
+      if (serverErr) throw serverErr;
+      if (ws.readyState !== WebSocket.OPEN) throw new Error('WebSocket disconnected');
+      ws.send(value);
+    }
+  } finally {
+    try { reader.releaseLock(); } catch {}
+  }
+
+  if (serverErr) throw serverErr;
+  ws.send(JSON.stringify({ type: 'finish' }));
+  await donePromise;
+  showUploadProgress(name, file.size, file.size);
+}
+
+async function handleUpload(files) {
+  if (!files || files.length === 0) return;
+  hideError();
+  const list = Array.from(files);
+  try {
+    const ws = await ensureUploadWS();
+    for (const file of list) {
+      await uploadOneFile(ws, file);
+    }
+    clearUploadProgress();
+    armUploadIdleClose();
     loadDir(currentPath);
   } catch (e) {
     showError('Upload failed: ' + e.message);
+    clearUploadProgress();
+    if (uploadWS && uploadWS.readyState === WebSocket.OPEN) {
+      try { uploadWS.send(JSON.stringify({ type: 'abort' })); } catch {}
+      uploadWS.close();
+    }
   }
+}
+
+uploadInput.addEventListener('change', async () => {
+  const files = Array.from(uploadInput.files);
   uploadInput.value = '';
+  await handleUpload(files);
+});
+
+uploadFolderInput.addEventListener('change', async () => {
+  const files = Array.from(uploadFolderInput.files);
+  uploadFolderInput.value = '';
+  await handleUpload(files);
 });
 
 mkdirBtn.addEventListener('click', async () => {
