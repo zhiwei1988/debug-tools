@@ -6,7 +6,7 @@
 - **Stack Analyzer** (`stack-analyzer.html`)：把崩溃 backtrace 与 ELF 文件发到后端，调用 `addr2line` 解析函数名、源码文件与行号。支持 GDB、ESP-IDF、ARM HardFault 等常见格式；对包含 `Exception Info` 的日志会根据 `Maps` 做手动栈回溯。
 - **File Browser** (`file-browser.html`)：浏览 / 上传 / 下载 / 删除后端 `fileRoot` 目录下的文件。
 
-前端页面是纯静态的，不需要构建。后端仅在使用 Stack Analyzer 或 File Browser 时才需要启动。
+Node.js 服务同时提供三个页面、JSON API 和 WebSocket 上传通道，单进程、单端口（默认 `8090`）。前端页面是纯静态的，不需要构建。
 
 ## 目录结构
 
@@ -26,25 +26,20 @@ debug-tools/
 
 ## 快速开始
 
-### 只用 Log Parser
-
-不需要后端，直接用浏览器打开 `index.html` 即可。也可以用任意静态服务器提供：
-
-```bash
-python3 -m http.server 8080
-# 然后访问 http://localhost:8080/index.html
-```
-
-### 启动后端（Stack Analyzer / File Browser 需要）
-
 ```bash
 cd server
 npm install
-npm start           # 默认监听 3000
-PORT=8000 npm start # 自定义端口
+npm start            # 默认监听 8090
+PORT=9000 npm start  # 自定义端口
 ```
 
-服务启动后，前端页面顶部填入 `http://<host>:3000` 并点击 **Connect** 即可。
+然后用浏览器打开：
+
+- `http://localhost:8090/` — Log Parser
+- `http://localhost:8090/stack-analyzer.html` — Stack Analyzer
+- `http://localhost:8090/file-browser.html` — File Browser
+
+三个页面与后端 API、WebSocket 同源，无需任何配置。
 
 ## 配置
 
@@ -75,7 +70,7 @@ Stack Analyzer 可选的 `addr2line` 白名单，key 会显示在前端 Toolchai
 
 ### Log Parser
 
-1. 打开 `index.html`，点上传区选择归档文件。
+1. 打开 `http://localhost:8090/`，点上传区选择归档文件。
 2. 解析完成后：
    - **File Downloads**：按文件名过滤并下载原始文件。
    - **Filter 栏**：按日期 / 时间范围 / 文件名 / 关键字过滤，支持 `AND` / `OR` / `()` / `"短语"`。
@@ -84,7 +79,7 @@ Stack Analyzer 可选的 `addr2line` 白名单，key 会显示在前端 Toolchai
 
 ### Stack Analyzer
 
-1. 填入后端 URL，点 **Connect** 拉取可用的 toolchain。
+1. 打开 `http://localhost:8090/stack-analyzer.html`，toolchain 下拉框会自动从后端拉取。
 2. 选择 toolchain，粘贴 backtrace 日志，选择一个或多个 ELF 文件（带调试符号）。
 3. 点 **Analyze**，解析后的栈帧可以 **Export** 为文本。
 
@@ -95,7 +90,7 @@ Stack Analyzer 可选的 `addr2line` 白名单，key 会显示在前端 Toolchai
 
 ### File Browser
 
-1. 填入后端 URL，点 **Connect**。
+1. 打开 `http://localhost:8090/file-browser.html`，根目录内容会自动列出。
 2. 可以浏览 / 进入子目录 / 上传 / 新建目录 / 下载 / 删除。所有路径都限制在 `fileRoot` 下，无法越权。
 
 ## API（后端）
@@ -132,4 +127,4 @@ Stack Analyzer 可选的 `addr2line` 白名单，key 会显示在前端 Toolchai
 ## 依赖
 
 - **前端**：浏览器，`pako` 与 `fflate`（通过 CDN `jsdelivr.net` 加载，离线环境需自行替换）。
-- **后端**：Node.js ≥ 16，`express`、`cors`、`multer`、`archiver`、`ws`，以及所需的 `*-addr2line` 可执行文件（如 `arm-none-eabi`、`xtensa-esp32-elf`）。
+- **后端**：Node.js ≥ 16，`express`、`multer`、`archiver`、`ws`，以及所需的 `*-addr2line` 可执行文件（如 `arm-none-eabi`、`xtensa-esp32-elf`）。

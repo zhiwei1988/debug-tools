@@ -1,5 +1,4 @@
 const express = require('express');
-const cors = require('cors');
 const multer = require('multer');
 const archiver = require('archiver');
 const { WebSocketServer } = require('ws');
@@ -10,7 +9,7 @@ const os = require('os');
 const crypto = require('crypto');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8090;
 
 // Load config
 const CONFIG_PATH = path.join(__dirname, 'config.json');
@@ -38,12 +37,16 @@ const upload = multer({
   limits: { fileSize: 100 * 1024 * 1024 },
 });
 
-app.use(cors());
 app.use((req, res, next) => {
   // Skip body parsing for multipart so multer can handle it
   if (req.headers['content-type']?.startsWith('multipart/')) return next();
   express.text({ type: '*/*' })(req, res, next);
 });
+
+// Serve the project root as static assets (HTML/CSS/JS). Safe because the API
+// and WS routes are registered below; path-based routing gives /api/* and /ws
+// priority over static files.
+app.use(express.static(path.join(__dirname, '..')));
 
 // --- Backtrace Parser ---
 

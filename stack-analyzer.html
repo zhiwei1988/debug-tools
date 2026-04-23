@@ -54,20 +54,14 @@ textarea {
 
   <div class="card">
     <div class="form-row">
-      <label for="serverUrl">Server URL</label>
+      <label for="toolchain">Toolchain</label>
       <div class="file-row">
-        <input type="text" id="serverUrl" style="flex:1" placeholder="http://192.168.1.100:3000">
-        <button class="btn" id="connectBtn">Connect</button>
+        <select id="toolchain" style="flex:1">
+          <option value="">Loading...</option>
+        </select>
         <button class="btn" id="detectBtn">Detect Toolchains</button>
         <span id="detectMsg" style="font-size:13px;color:#555"></span>
       </div>
-    </div>
-
-    <div class="form-row">
-      <label for="toolchain">Toolchain</label>
-      <select id="toolchain">
-        <option value="">-- Connect to server first --</option>
-      </select>
     </div>
 
     <div class="form-row">
@@ -101,10 +95,6 @@ textarea {
 </div>
 
 <script>
-const STORAGE_KEY = 'stack-analyzer-server';
-
-const serverUrlEl = document.getElementById('serverUrl');
-const connectBtn = document.getElementById('connectBtn');
 const toolchainEl = document.getElementById('toolchain');
 const backtraceEl = document.getElementById('backtrace');
 const elfInput = document.getElementById('elfInput');
@@ -115,47 +105,32 @@ const errorMsg = document.getElementById('errorMsg');
 const resultsEl = document.getElementById('results');
 const framesEl = document.getElementById('frames');
 const exportBtn = document.getElementById('exportBtn');
+const detectBtn = document.getElementById('detectBtn');
+const detectMsg = document.getElementById('detectMsg');
 let lastFrames = [];
 
-// Restore saved server URL
-serverUrlEl.value = localStorage.getItem(STORAGE_KEY) || '';
-
-function serverUrl() {
-  return serverUrlEl.value.trim().replace(/\/$/, '');
-}
-
 async function loadToolchains() {
-  const url = serverUrl();
-  if (!url) { showError('Please enter the server URL first.'); return; }
   hideError();
   toolchainEl.innerHTML = '<option value="">Loading...</option>';
   try {
-    const res = await fetch(`${url}/api/toolchains`);
+    const res = await fetch('/api/toolchains');
     if (!res.ok) throw new Error('Server error');
     const { toolchains } = await res.json();
     toolchainEl.innerHTML = toolchains.length
       ? '<option value="">Select toolchain...</option>' + toolchains.map(t => `<option value="${t}">${t}</option>`).join('')
       : '<option value="">No toolchains configured</option>';
-    localStorage.setItem(STORAGE_KEY, url);
   } catch {
-    toolchainEl.innerHTML = '<option value="">-- Connect to server first --</option>';
-    showError('Cannot reach the analyzer server. Check the URL and make sure the server is running.');
+    toolchainEl.innerHTML = '<option value="">Unavailable</option>';
+    showError('Cannot reach the analyzer server. Make sure the server is running.');
   }
 }
 
-const detectBtn = document.getElementById('detectBtn');
-const detectMsg = document.getElementById('detectMsg');
-
-connectBtn.addEventListener('click', loadToolchains);
-
 detectBtn.addEventListener('click', async () => {
-  const url = serverUrl();
-  if (!url) { showError('Please enter the server URL first.'); return; }
   hideError();
   detectMsg.textContent = 'Detecting...';
   detectBtn.disabled = true;
   try {
-    const res = await fetch(`${url}/api/toolchains/detect`, { method: 'POST' });
+    const res = await fetch('/api/toolchains/detect', { method: 'POST' });
     if (!res.ok) throw new Error('Server error');
     const { found } = await res.json();
     detectMsg.textContent = found.length ? `Found ${found.length} new toolchain(s)` : 'No new toolchains found';
@@ -167,8 +142,8 @@ detectBtn.addEventListener('click', async () => {
     detectBtn.disabled = false;
   }
 });
-// Auto-connect if a saved URL exists
-if (serverUrlEl.value) loadToolchains();
+
+loadToolchains();
 
 elfInput.addEventListener('change', () => {
   const files = elfInput.files;
@@ -208,7 +183,7 @@ async function analyze() {
       form.append('elf', f);
     }
 
-    const res = await fetch(`${serverUrl()}/api/analyze`, { method: 'POST', body: form });
+    const res = await fetch('/api/analyze', { method: 'POST', body: form });
     const data = await res.json();
 
     if (!res.ok) {

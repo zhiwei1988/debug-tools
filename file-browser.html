@@ -34,17 +34,7 @@
   <div class="nav"><a href="index.html">Log Parser</a> / <a href="stack-analyzer.html">Stack Analyzer</a> / File Browser</div>
   <h1>File Browser</h1>
 
-  <div class="card">
-    <div class="form-row">
-      <label for="serverUrl">Server URL</label>
-      <div class="file-row">
-        <input type="text" id="serverUrl" style="flex:1" placeholder="http://192.168.1.100:3000">
-        <button class="btn" id="connectBtn">Connect</button>
-      </div>
-    </div>
-    <div class="error-msg" id="errorMsg"></div>
-  </div>
-
+  <div class="error-msg" id="errorMsg" style="display:none"></div>
   <div class="root-info" id="rootInfo"></div>
 
   <div class="card" id="content" style="display:none">
@@ -69,9 +59,6 @@
 </div>
 
 <script>
-const STORAGE_KEY = 'file-browser-server';
-const serverUrlEl = document.getElementById('serverUrl');
-const connectBtn = document.getElementById('connectBtn');
 const errorMsgEl = document.getElementById('errorMsg');
 const rootInfoEl = document.getElementById('rootInfo');
 const contentEl = document.getElementById('content');
@@ -87,44 +74,34 @@ const uploadProgressTextEl = document.getElementById('uploadProgressText');
 
 let currentPath = '.';
 
-serverUrlEl.value = localStorage.getItem(STORAGE_KEY) || '';
-
-function serverUrl() {
-  return serverUrlEl.value.trim().replace(/\/$/, '');
-}
-
 function showError(msg) { errorMsgEl.textContent = msg; errorMsgEl.style.display = 'block'; }
 function hideError() { errorMsgEl.style.display = 'none'; }
 
-connectBtn.addEventListener('click', connect);
-if (serverUrlEl.value) connect();
-
-async function connect() {
-  const url = serverUrl();
-  if (!url) { showError('Please enter the server URL first.'); return; }
+async function init() {
   hideError();
   try {
-    const res = await fetch(`${url}/api/files/root`);
+    const res = await fetch('/api/files/root');
     if (!res.ok) throw new Error('Server error');
     const data = await res.json();
     rootInfoEl.textContent = 'Root: ' + data.root;
     rootInfoEl.style.display = 'block';
     contentEl.style.display = 'block';
-    localStorage.setItem(STORAGE_KEY, url);
     currentPath = '.';
     loadDir('.');
   } catch {
     rootInfoEl.style.display = 'none';
     contentEl.style.display = 'none';
-    showError('Cannot reach the server. Check the URL and make sure the server is running.');
+    showError('Cannot reach the server. Make sure the server is running.');
   }
 }
+
+init();
 
 async function loadDir(rel) {
   currentPath = rel;
   hideError();
   try {
-    const res = await fetch(`${serverUrl()}/api/files/list?path=${encodeURIComponent(rel)}`);
+    const res = await fetch(`/api/files/list?path=${encodeURIComponent(rel)}`);
     if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Server error'); }
     const data = await res.json();
     renderBreadcrumb(rel);
@@ -179,11 +156,11 @@ function renderTable(entries, rel) {
 }
 
 function download(rel) {
-  window.open(`${serverUrl()}/api/files/download?path=${encodeURIComponent(rel)}`, '_blank');
+  window.open(`/api/files/download?path=${encodeURIComponent(rel)}`, '_blank');
 }
 
 function downloadFolder(rel) {
-  window.open(`${serverUrl()}/api/files/download-folder?path=${encodeURIComponent(rel)}`, '_blank');
+  window.open(`/api/files/download-folder?path=${encodeURIComponent(rel)}`, '_blank');
 }
 
 const UPLOAD_WS_IDLE_MS = 30 * 1000;
@@ -192,8 +169,8 @@ let uploadWS = null;
 let uploadWSIdleTimer = null;
 
 function wsUrl() {
-  const u = serverUrl();
-  return u.replace(/^http/i, (m) => m.toLowerCase() === 'https' ? 'wss' : 'ws') + '/ws';
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${proto}//${location.host}/ws`;
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -345,7 +322,7 @@ mkdirBtn.addEventListener('click', async () => {
   if (!name) return;
   const newPath = currentPath === '.' ? name : currentPath + '/' + name;
   try {
-    const res = await fetch(`${serverUrl()}/api/files/mkdir`, {
+    const res = await fetch('/api/files/mkdir', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: newPath }),
@@ -360,7 +337,7 @@ mkdirBtn.addEventListener('click', async () => {
 async function remove(rel) {
   if (!confirm('Delete "' + rel + '"?')) return;
   try {
-    const res = await fetch(`${serverUrl()}/api/files/delete`, {
+    const res = await fetch('/api/files/delete', {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ path: rel }),
