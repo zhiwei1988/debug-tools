@@ -16,6 +16,12 @@ const CONFIG_PATH = path.join(__dirname, 'config.json');
 let config = {};
 try { config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')); } catch(e) {}
 const FILE_ROOT = path.resolve(__dirname, config.fileRoot || '.');
+const UPLOAD_TMP_DIR = path.join(FILE_ROOT, '.uploads-tmp');
+const LEGACY_SENTINEL = path.join(UPLOAD_TMP_DIR, '.legacy-cleaned');
+
+function makeTmpName() {
+  return crypto.randomBytes(8).toString('hex') + '.part';
+}
 
 function safePath(rel) {
   var abs = path.resolve(FILE_ROOT, path.normalize(rel || '.'));
@@ -549,24 +555,47 @@ app.delete('/api/files/delete', express.json(), (req, res) => {
 
 // --- WebSocket Upload (/ws) ---
 
-const TMP_SUFFIX_RE = /\.uploading\.[a-f0-9]{6}$/;
+const LEGACY_TMP_SUFFIX_RE = /\.uploading\.[a-f0-9]+$/;
 const IDLE_TIMEOUT_MS = 30 * 1000;
 const ACK_BYTES = 1024 * 1024;
 const ACK_INTERVAL_MS = 200;
 const BACKPRESSURE_BYTES = 8 * 1024 * 1024;
 
-// Sweep stranded tmp files left by prior runs (server crash / WS drop mid-transfer)
-function cleanupOrphans(dir) {
-  let entries;
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-  for (const entry of entries) {
-    const full = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      cleanupOrphans(full);
-    } else if (TMP_SUFFIX_RE.test(entry.name)) {
-      try { fs.unlinkSync(full); } catch {}
-    }
+// Sweep stranded tmp files left by prior runs (server crash / WS drop mid-transfer).
+// Only scans UPLOAD_TMP_DIR — keeping this O(pending tmp count) instead of
+// O(FILE_ROOT tree size) is what makes startup fast on large roots.
+function cleanupOrphans() {
+  let names;
+  try { names = fs.readdirSync(UPLOAD_TMP_DIR); } catch { return; }
+  // Snapshot before any unlink so uploads started mid-cleanup survive.
+  const snapshot = names.filter((n) => n.endsWith('.part'));
+  for (const name of snapshot) {
+    try { fs.unlinkSync(path.join(UPLOAD_TMP_DIR, name)); } catch {}
   }
+}
+
+// One-time recursive sweep of FILE_ROOT to remove legacy `*.uploading.*` files
+// from the pre-collection-directory layout. Guarded by a sentinel so it only
+// pays the full-tree cost once per deployment.
+function runLegacySweepOnce() {
+  try { fs.accessSync(LEGACY_SENTINEL); return; } catch {}
+
+  const walk = (dir) => {
+    let items;
+    try { items = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const it of items) {
+      const full = path.join(dir, it.name);
+      if (it.isDirectory()) {
+        if (full === UPLOAD_TMP_DIR) continue;
+        walk(full);
+      } else if (LEGACY_TMP_SUFFIX_RE.test(it.name)) {
+        try { fs.unlinkSync(full); } catch {}
+      }
+    }
+  };
+
+  walk(FILE_ROOT);
+  try { fs.writeFileSync(LEGACY_SENTINEL, ''); } catch {}
 }
 
 function attachUploadWS(httpServer) {
@@ -644,7 +673,11 @@ function attachUploadWS(httpServer) {
       if (!abs) { sendError('access denied'); return; }
       try { fs.mkdirSync(path.dirname(abs), { recursive: true }); }
       catch (e) { sendError('mkdir failed: ' + e.message); return; }
-      const tmp = abs + '.uploading.' + crypto.randomBytes(3).toString('hex');
+      // Tmp files live in a single collection directory so orphan cleanup
+      // doesn't have to walk the full FILE_ROOT tree at startup.
+      try { fs.mkdirSync(UPLOAD_TMP_DIR, { recursive: true }); }
+      catch (e) { sendError('mkdir failed: ' + e.message); return; }
+      const tmp = path.join(UPLOAD_TMP_DIR, makeTmpName());
       let stream;
       try { stream = fs.createWriteStream(tmp); }
       catch (e) { sendError('open tmp failed: ' + e.message); return; }
@@ -715,9 +748,18 @@ function attachUploadWS(httpServer) {
   });
 }
 
-cleanupOrphans(FILE_ROOT);
+// Create the collection directory eagerly so the sentinel write in the
+// legacy sweep can't race a concurrent first upload.
+try { fs.mkdirSync(UPLOAD_TMP_DIR, { recursive: true }); } catch {}
 
 const httpServer = app.listen(PORT, () => {
   console.log(`Stack analyzer server listening on port ${PORT}`);
 });
 attachUploadWS(httpServer);
+
+// Orphan and legacy cleanup run after listen so the HTTP port is reachable
+// immediately, independent of FILE_ROOT size.
+setImmediate(() => {
+  cleanupOrphans();
+  runLegacySweepOnce();
+});

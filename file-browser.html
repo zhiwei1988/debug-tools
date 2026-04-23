@@ -45,6 +45,9 @@
       <label class="btn" for="uploadFolderInput">Upload Folder</label>
       <input type="file" id="uploadFolderInput" webkitdirectory directory multiple style="display:none">
       <button class="btn" id="mkdirBtn">New Folder</button>
+      <label style="margin-left:auto;font-size:13px;display:inline-flex;align-items:center;gap:6px;">
+        <input type="checkbox" id="showHiddenToggle"> Show hidden
+      </label>
     </div>
     <div class="upload-progress" id="uploadProgress">
       <span class="name" id="uploadProgressName"></span>
@@ -67,18 +70,22 @@ const fileListEl = document.getElementById('fileList');
 const uploadInput = document.getElementById('uploadInput');
 const uploadFolderInput = document.getElementById('uploadFolderInput');
 const mkdirBtn = document.getElementById('mkdirBtn');
+const showHiddenToggle = document.getElementById('showHiddenToggle');
 const uploadProgressEl = document.getElementById('uploadProgress');
 const uploadProgressNameEl = document.getElementById('uploadProgressName');
 const uploadProgressBarEl = document.getElementById('uploadProgressBar');
 const uploadProgressTextEl = document.getElementById('uploadProgressText');
 
 let currentPath = '.';
+let lastEntries = [];
+let showHidden = localStorage.getItem('fb.showHidden') === 'true';
 
 function showError(msg) { errorMsgEl.textContent = msg; errorMsgEl.style.display = 'block'; }
 function hideError() { errorMsgEl.style.display = 'none'; }
 
 async function init() {
   hideError();
+  showHiddenToggle.checked = showHidden;
   try {
     const res = await fetch('/api/files/root');
     if (!res.ok) throw new Error('Server error');
@@ -95,6 +102,12 @@ async function init() {
   }
 }
 
+showHiddenToggle.addEventListener('change', () => {
+  showHidden = showHiddenToggle.checked;
+  localStorage.setItem('fb.showHidden', String(showHidden));
+  renderTable(lastEntries, currentPath);
+});
+
 init();
 
 async function loadDir(rel) {
@@ -104,8 +117,9 @@ async function loadDir(rel) {
     const res = await fetch(`/api/files/list?path=${encodeURIComponent(rel)}`);
     if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Server error'); }
     const data = await res.json();
+    lastEntries = data.entries;
     renderBreadcrumb(rel);
-    renderTable(data.entries, rel);
+    renderTable(lastEntries, rel);
   } catch (e) {
     showError('Load failed: ' + e.message);
   }
@@ -123,12 +137,13 @@ function renderBreadcrumb(rel) {
 }
 
 function renderTable(entries, rel) {
+  const visible = showHidden ? entries : entries.filter(e => !e.name.startsWith('.'));
   let html = '';
   if (rel !== '.') {
     const parent = rel.includes('/') ? rel.substring(0, rel.lastIndexOf('/')) : '.';
     html += '<tr><td class="name-cell" colspan="4"><span class="icon">..</span><a onclick="loadDir(\'' + esc(parent) + '\')">..</a></td></tr>';
   }
-  for (const e of entries) {
+  for (const e of visible) {
     const entryPath = rel === '.' ? e.name : rel + '/' + e.name;
     const escapedPath = esc(entryPath);
     html += '<tr>';
@@ -149,7 +164,7 @@ function renderTable(entries, rel) {
     html += '<button class="btn btn-danger" onclick="remove(\'' + escapedPath + '\')">Delete</button>';
     html += '</td></tr>';
   }
-  if (entries.length === 0 && rel === '.') {
+  if (visible.length === 0 && rel === '.') {
     html += '<tr><td colspan="4" style="color:#aaa;text-align:center;padding:20px">Empty directory</td></tr>';
   }
   fileListEl.innerHTML = html;
